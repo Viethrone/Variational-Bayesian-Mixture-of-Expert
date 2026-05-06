@@ -8,7 +8,6 @@ This repository provides a **simplified 1D implementation** of the method descri
 ## Key differences from the paper
 - **1D** instead of 2D (each CDP trace processed independently)
 - **Diagonal Gaussian** instead of full covariance for expert proposals
-- No spatial correlation between neighbouring traces (except via provided spatial prior maps)
 
 Despite these simplifications, the core variational Bayesian mixture‑of‑experts framework remains the same, and the code can be easily extended to the full 2D version.
 
@@ -21,3 +20,39 @@ Despite these simplifications, the core variational Bayesian mixture‑of‑expe
 Install dependencies:
 ```bash
 pip install -r requirements.txt
+```
+
+## Data Preparation
+
+Place the following files in `./data/` (paths can be changed in `config.py`):
+
+| File                          | Description                                 |
+|-------------------------------|---------------------------------------------|
+| `Vp.npy`, `Vs.npy`, `Den.npy` | True elastic models (2D sections)           |
+| `elastic_impedance_results.mat` | Synthetic angle gathers (6 angles)        |
+| `gmm_priors3.npz`             | GMM prior: `means`, `variances` (K×3)       |
+| `spatial_prior3.pt`           | Spatial prior maps (K×H×W)                  |
+
+
+## Repository Structure
+```
+.
+├── config.py
+├── train.py
+├── requirements.txt
+├── README.md
+├── data/ # your data files
+├── models/
+│ ├── VBMILE1d.py # Main model (Geo_VBMILE_1D)
+│ ├── VBlosses.py
+│ └── forward.py
+├── data/ (package)
+│ └── dataset.py
+└── utils/
+├── lr_scheduler.py
+├── metrics.py
+└── plotting.py
+```
+
+## License
+MIT License – see `LICENSE`.

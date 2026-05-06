@@ -1,0 +1,4 @@
+VBMILE1d/data/*.npy filter=lfs diff=lfs merge=lfs -text
+VBMILE1D/data/*.mat filter=lfs diff=lfs merge=lfs -text
+VBMILE1D/data/*.npz filter=lfs diff=lfs merge=lfs -text
+VBMILE1D/data/*.pt filter=lfs diff=lfs merge=lfs -text

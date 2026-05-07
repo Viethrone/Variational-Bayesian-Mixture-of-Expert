@@ -1,23 +1,44 @@
-# Variational-Bayesian-Mixture-of-Expert
+# Variational Bayesian Mixture of Experts for AVA Inversion
 
-This repository provides a **simplified 1D implementation** of the method described in the paper:
+This repository provides **two implementations** of the method described in the paper:  
+*"Geology‑Guided Variational Bayesian Mixture of Experts for AVA Inversion"*.
 
-> **"Geology-Guided Variational Bayesian Mixture of Experts for AVA Inversion"**  
-> *(Full paper uses 2D spatial priors and full‑covariance GMM; this code is a 1D, diagonal‑covariance version for clarity and fast prototyping.)*
+| Version | Directory | Description | Key Features | GPU Memory |
+|---------|-----------|-------------|--------------|-------------|
+| **1D (simplified)** | `VBMILE1d/` | Fast prototyping, trace‑independent | Diagonal Gaussian, 1D convolutions | < 2 GB |
+| **2D (full)** | `VBMILE2d/` | Complete paper implementation | Full‑covariance GMM, 2D spatial priors, FiLM modulation | **> 8 GB** |
 
-## Key differences from the paper
-- **1D** instead of 2D (each CDP trace processed independently)
-- **Diagonal Gaussian** instead of full covariance for expert proposals
+Use the **1D version** for quick experiments, debugging, and resource‑limited environments.  
+Use the **2D version** to reproduce the results reported in the paper (requires a GPU with >8 GB memory).
 
-Despite these simplifications, the core variational Bayesian mixture‑of‑experts framework remains the same, and the code can be easily extended to the full 2D version.
-
+The synthetic seismic data are generated using the **Aki‑Richards approximation** for six angles: **5°, 10°, 15°, 20°, 25°, 30°**.
 ---
+
+## Project Overview
+
+| Component | Description |
+|-----------|-------------|
+| **Elastic parameters** | Vp, Vs, Density (three‑parameter inversion) |
+| **Model test** | Marmousi2 (2D section, 1200×1360 after subsampling) |
+| **Forward modelling** | Aki‑Richards equation → angle‑domain seismic gathers |
+| **Prior** | GMM trained on well logs (3 components), providing mean vectors and covariance matrices. For 1D simplification we use diagonal variances; for 2D we use full covariances. |
+| **Visualisation** | Predicted sections, uncertainty envelopes, expert partition maps, covariance structures. |
+
+![Marmousi2 true model (Vp)](imgs/marmousi_model.png)  
+*True elastic parameters from Marmousi2 (Vp, Vs, Density)*
+
+![Synthetic angle gathers](imgs/marmousi_syn.png)  
+*Example of synthetic seismic data for six angles (5°–30°)*
+
+![GMM prior covariances](imgs/marmousi_cov.png)  
+*Learned prior covariances for three experts (3×3 matrices)*
 
 ## Requirements
 
-- Python 3.9+, PyTorch 1.10+, NumPy, SciPy, Matplotlib, scikit‑image, scikit‑learn
+- Python 3.9+
+- PyTorch 1.10+ (CUDA recommended for 2D version)
+- NumPy, SciPy, Matplotlib, scikit‑image, scikit‑learn
 
-Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
@@ -30,29 +51,9 @@ Place the following files in `./data/` (paths can be changed in `config.py`):
 |-------------------------------|---------------------------------------------|
 | `Vp.npy`, `Vs.npy`, `Den.npy` | True elastic models (2D sections)           |
 | `elastic_impedance_results.mat` | Synthetic angle gathers (6 angles)        |
-| `gmm_priors3.npz`             | GMM prior: `means`, `variances` (K×3)       |
 | `spatial_prior3.pt`           | Spatial prior maps (K×H×W)                  |
 
 
-## Repository Structure
-```
-.
-├── config.py
-├── train.py
-├── requirements.txt
-├── README.md
-├── data/ # your data files
-├── models/
-│ ├── VBMILE1d.py # Main model (Geo_VBMILE_1D)
-│ ├── VBlosses.py
-│ └── forward.py
-├── data/ (package)
-│ └── dataset.py
-└── utils/
-├── lr_scheduler.py
-├── metrics.py
-└── plotting.py
-```
 
 ## License
 MIT License – see `LICENSE`.

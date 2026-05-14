@@ -17,8 +17,8 @@ class VBELBO2D(nn.Module):
                  prior_means: Optional[torch.Tensor] = None,
                  prior_vars: Optional[torch.Tensor] = None):
         super().__init__()
-        self.log_seismic_var = nn.Parameter(torch.tensor(math.log(seismic_obs_noise_init ** 2)))
-        self.log_well_var = nn.Parameter(torch.tensor(math.log(well_obs_noise_init ** 2)))
+        self.log_seismic_var = nn.Parameter(torch.tensor(math.log(seismic_obs_noise_init ** 2), requires_grad=False))
+        self.log_well_var = nn.Parameter(torch.tensor(math.log(well_obs_noise_init ** 2), requires_grad=False))
         self.clip_diff = clip_diff
         self.log_two_pi = math.log(2 * math.pi)
 
@@ -37,7 +37,7 @@ class VBELBO2D(nn.Module):
     def _nll_well(self, mu: torch.Tensor, logvar: torch.Tensor,
                   target: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Tensor:
         var_theta = torch.exp(logvar)
-        total_var = var_theta + self.well_var
+        total_var = var_theta + self.well_var + 1e-4
         diff = (target - mu).clamp(-self.clip_diff, self.clip_diff)
         nll = 0.5 * (diff ** 2 / total_var + self.log_two_pi + torch.log(total_var))
         if mask is not None:
@@ -49,7 +49,8 @@ class VBELBO2D(nn.Module):
 
     def _nll_seismic(self, syn: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
         diff = (syn - obs).clamp(-self.clip_diff, self.clip_diff)
-        nll = 0.5 * (diff ** 2 / self.seismic_var + self.log_two_pi + torch.log(self.seismic_var))
+        var = self.seismic_var + 1e-4
+        nll = 0.5 * (diff ** 2 / var + self.log_two_pi + torch.log(var))
         nll = torch.nan_to_num(nll, nan=0.0, posinf=1e6, neginf=-1e6)
         return nll.mean()
 
@@ -83,9 +84,9 @@ class VBELBO2D(nn.Module):
         else:
             weighted_kl_theta = kl_theta_per_expert.mean()
 
-        total_loss = (nll_well + seismic_nll +
+        total_loss = (nll_well + 0.1*seismic_nll +
                       self.kl_z_weight * kl_z +
-                      self.kl_theta_weight * weighted_kl_theta)
+                      self.kl_theta_weight * weighted_kl_theta)  # 正演模块存在子波与模型假设，根据需要加权
 
         loss_dict = {
             'total': total_loss,

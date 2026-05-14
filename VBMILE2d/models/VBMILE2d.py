@@ -1,6 +1,7 @@
 # ============================================================================
 # 变分贝叶斯混合专家（VB-MILE）网络与训练模块
 # 用于地震弹性参数反演（AVA）
+# 尺寸不一致均使用插值填补，未使用padding
 # ============================================================================
 
 import math
@@ -80,7 +81,7 @@ class UNetEncoder2D(nn.Module):
 
 
 # ============================================================================
-# 变分分区层（门控网络）——支持动态温度
+# 变分分区层（门控网络）
 # ============================================================================
 
 class VariationalPartitionLayer2D(nn.Module):
@@ -125,7 +126,7 @@ class VariationalPartitionLayer2D(nn.Module):
 
 
 # ============================================================================
-# 专家解码器（带空间 FiLM 调制）——保持不变，但统一 padding_mode
+# 专家解码器（带空间 FiLM 调制）
 # ============================================================================
 
 class SpatialFiLMGenerator(nn.Module):
@@ -183,7 +184,6 @@ class FiLMBasicBlock2D(nn.Module):
 
 
 class ExpertDecoder2D(nn.Module):
-    """完全独立的专家解码器，每个专家输出联合高斯分布的均值和 Cholesky 因子。"""
     def __init__(self, skip_channels: List[int], num_experts: int, norm_type: str = 'group',
                  prior_means: Optional[torch.Tensor] = None,
                  prior_cov_chol: Optional[torch.Tensor] = None,
@@ -191,97 +191,134 @@ class ExpertDecoder2D(nn.Module):
                  modulation_scale: float = 0.5):
         super().__init__()
         self.num_experts = num_experts
-        c1, c2, c4 = skip_channels   # base*2, base*4, base
+        c1, c2, c4 = skip_channels
 
-        # 全局残差分支（所有专家共享）
+        # 全局残差分支
         self.global_residual = nn.Sequential(
-            nn.Conv2d(c4, c4, 3, dilation=3, padding=3, bias=False, padding_mode='reflect'),
+            nn.Conv2d(c4, c4, 1, bias=False, padding_mode='reflect'),
             NormFactory2D.create_norm(norm_type, c4),
             nn.GELU(),
             nn.Conv2d(c4, 9, 1, bias=True)
         )
 
-        # 每个专家独立的组件
         self.skip2_convs = nn.ModuleList()
         self.final_convs = nn.ModuleList()
         self.conv_fuses = nn.ModuleList()
-        self.out_joint = nn.ModuleList()
+        self.out_joint = nn.ModuleList()          # 每个元素是一个 ModuleList，包含 9 个头
 
         for _ in range(num_experts):
+            # skip2 处理
             skip2_conv = nn.Sequential(
-                nn.Conv2d(c2, c2, 3, dilation=3, padding=3, bias=False, padding_mode='replicate'),
+                nn.Conv2d(c2, c2, 1, bias=False, padding_mode='replicate'),
                 NormFactory2D.create_norm(norm_type, c2),
                 nn.GELU()
             )
             self.skip2_convs.append(skip2_conv)
 
+            # final 卷积
             final_conv = nn.Sequential(
-                nn.Conv2d(c1, c1, 3, dilation=5, padding=5, bias=False, padding_mode='reflect'),
+                nn.Conv2d(c1, c1, 1, bias=False, padding_mode='reflect'),
                 NormFactory2D.create_norm(norm_type, c1),
                 nn.GELU()
             )
             self.final_convs.append(final_conv)
 
+            # FiLM 融合块
             conv_fuse = FiLMBasicBlock2D(
                 in_channels=c2 + c1, out_channels=c1, norm_type=norm_type,
-                dilation=7, film_hidden_dim=film_hidden_dim,
+                dilation=2, film_hidden_dim=film_hidden_dim,
                 film_kernel_size=film_kernel_size, modulation_scale=modulation_scale
             )
             self.conv_fuses.append(conv_fuse)
 
-            head = nn.Sequential(
-                nn.Conv2d(c1, c1, 3, padding=1, bias=False, padding_mode='reflect'),
-                NormFactory2D.create_norm(norm_type, c1),
-                nn.GELU(),
-                nn.Conv2d(c1, 9, 1, bias=True)
-            )
-            self.out_joint.append(head)
+            # 为该专家创建 9 个独立的头
+            heads = nn.ModuleList()
+            for _ in range(9):
+                head = nn.Sequential(
+                    nn.Conv2d(c1, c1, 1, bias=False, padding_mode='reflect'),
+                    NormFactory2D.create_norm(norm_type, c1),
+                    nn.GELU(),
+                    nn.Conv2d(c1, 1, 1, bias=True)
+                )
+                heads.append(head)
+            self.out_joint.append(heads)
 
-        # 使用先验信息初始化偏置
+        # 先验初始化
         if prior_means is not None and prior_cov_chol is not None:
             with torch.no_grad():
                 for k in range(num_experts):
-                    self.out_joint[k][-1].bias.data[:3] = prior_means[k]
+                    # 均值头（索引 0,1,2）
+                    for i in range(3):
+                        self.out_joint[k][i][-1].bias.data.fill_(prior_means[k][i])
+                    # Cholesky 头（索引 3~8）
                     idx = torch.tril_indices(3, 3)
                     chol_vec = prior_cov_chol[k][idx[0], idx[1]]
-                    self.out_joint[k][-1].bias.data[3:] = chol_vec
+                    for i in range(6):
+                        self.out_joint[k][3 + i][-1].bias.data.fill_(chol_vec[i])
 
     def forward(self, features: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
                 target_size: Tuple[int, int], z_soft: torch.Tensor) -> torch.Tensor:
         skip1, skip2, global_feat = features
-        B, _, H, W = skip1.shape
 
         global_out = self.global_residual(global_feat)
         if global_out.shape[-2:] != target_size:
-            global_out = F.interpolate(global_out, size=target_size, mode='bilinear', align_corners=False)
+            global_out = F.interpolate(global_out, size=target_size, mode='bilinear', align_corners=True)
 
         expert_outputs = []
         for k in range(self.num_experts):
-            w_prob = z_soft[:, k:k+1]                         # (B,1,H,W)
-            w_prob_s1 = F.interpolate(w_prob, size=skip1.shape[-2:], mode='bilinear')
+            w_prob = z_soft[:, k:k+1]
+            w_prob_s1 = F.interpolate(w_prob, size=skip1.shape[-2:], mode='bilinear', align_corners=True)
 
-            up_skip2 = F.interpolate(skip2, size=skip1.shape[-2:], mode='bilinear', align_corners=False)
+            up_skip2 = F.interpolate(skip2, size=skip1.shape[-2:], mode='bilinear', align_corners=True)
             up_skip2 = self.skip2_convs[k](up_skip2)
 
             x = torch.cat([up_skip2, skip1], dim=1)
             x = self.conv_fuses[k](x, w_prob_s1)
 
-            x = F.interpolate(x, size=target_size, mode='bilinear', align_corners=False)
+            x = F.interpolate(x, size=target_size, mode='bilinear', align_corners=True)
             x = self.final_convs[k](x)
 
-            out = self.out_joint[k](x)
-            out = out + global_out
+            # 9个独立头分别计算并拼接
+            head_outputs = []
+            for head in self.out_joint[k]:
+                out_ch = head(x)          # (B, 1, H_out, W_out)
+                head_outputs.append(out_ch)
+            out = torch.cat(head_outputs, dim=1)   # (B, 9, H_out, W_out)
+            
+            #if out.shape[-2:] != target_size:
+            #    out = F.interpolate(out, size=target_size, mode='bilinear', align_corners=True)
+
+            out = out + global_out  # 添加全局残差
 
             # 确保 Cholesky 对角线为正
-            chol_raw = out[:, 3:]
-            chol_raw[:, 0] = torch.exp(chol_raw[:, 0])   # L00
-            chol_raw[:, 2] = torch.exp(chol_raw[:, 2])   # L11
-            chol_raw[:, 5] = torch.exp(chol_raw[:, 5])   # L22
-            out = torch.cat([out[:, :3], chol_raw], dim=1)
+            min_diag = 1e-1
+
+            # 裁断
+            #chol_raw = out[:, 3:].clone()
+            #chol_raw[:, 0] = torch.exp(chol_raw[:, 0]).clamp(min=min_diag)   # L00
+            #chol_raw[:, 2] = torch.exp(chol_raw[:, 2]).clamp(min=min_diag)   # L11
+            #chol_raw[:, 5] = torch.exp(chol_raw[:, 5]).clamp(min=min_diag)   # L22
+            #out = torch.cat([out[:, :3], chol_raw], dim=1)
+
+            # softplus
+            mean_part = out[:, :3]                     # (B, 3, H, W)
+            chol_part = out[:, 3:]                     # (B, 6, H, W)
+            diag0 = torch.nn.functional.softplus(chol_part[:, 0:1]) + min_diag
+            diag2 = torch.nn.functional.softplus(chol_part[:, 2:3]) + min_diag
+            diag5 = torch.nn.functional.softplus(chol_part[:, 5:6]) + min_diag
+            new_chol_part = torch.cat([
+                diag0,
+                chol_part[:, 1:2],     
+                diag2,
+                chol_part[:, 3:5],      
+                diag5
+            ], dim=1)
+            out = torch.cat([mean_part, new_chol_part], dim=1)
+
             expert_outputs.append(out)
 
         return torch.stack(expert_outputs, dim=1)   # (B, K, 9, H_out, W_out)
-
+    
 
 # ============================================================================
 # 辅助函数：Cholesky ↔ 协方差矩阵
@@ -460,7 +497,8 @@ class GeoVBMILE2D(nn.Module):
 
         # 边际分布
         mu_marg, var_marg = self._compute_marginal_gaussian(z_soft, expert_mu, expert_cov)
-        logvar_marg = torch.log(var_marg.clamp(min=1e-6))
+        logvar_marg = torch.log(var_marg + 1e-5)
+        #logvar_marg = torch.clamp(logvar_marg, min=-3.0)
         final_pred = torch.cat([mu_marg, logvar_marg], dim=1)   # (B, 6, H, W)
 
         # 采样（可选）
@@ -584,5 +622,6 @@ class GeoVBMILE2D(nn.Module):
 
         samples = torch.stack(samples_list, dim=1)   # (B, num_samples, 3, H, W)
         return samples
+    
     
     

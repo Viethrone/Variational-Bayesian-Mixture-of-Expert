@@ -9,7 +9,7 @@ This repository provides **two implementations** of the method described in the 
 | **2D (full)** | `VBMILE2d/` | Complete paper implementation | Full‑covariance GMM, 2D spatial priors, FiLM modulation | **> 8 GB** |
 
 Use the **1D version** for quick experiments, debugging, and resource‑limited environments.  
-Use the **2D version** to reproduce the results reported in the paper (requires a GPU with >8 GB memory).
+Use the **2D version** to reproduce the results reported in the paper (requires a GPU with >16 GB memory).
 
 The synthetic seismic data are generated using the **Aki‑Richards approximation** for six angles: **5°, 10°, 15°, 20°, 25°, 30°**.
 ---
@@ -32,6 +32,13 @@ The synthetic seismic data are generated using the **Aki‑Richards approximatio
 
 ![GMM prior covariances](imgs/marmousi_cov.png)  
 *Learned prior covariances for three experts (3×3 matrices)*
+
+![Prediction results1](imgs/marmousi_inverse1.png)
+![Prediction results2](imgs/marmousi_inverse2.png)
+*Predictive elastic parameters(Vp)
+
+![Spatial partitioning](imgs/marmousi_sp.png)  
+*Variational gated network output partition*
 
 ## Requirements
 

@@ -64,7 +64,6 @@ def load_data(cfg, device):
     }
     return (Syn_norm, target_norm, target_low_norm, prior_spatial, stats, W)
 
-
 def train_one_epoch(model, dataloader, optimizer, criterion, forward, device, stats,
                     epoch: int, num_samples: int = 2, kl_z_weight: float = None,
                     kl_theta_weight: float = None):
@@ -176,7 +175,9 @@ def train_vb_mile(model, criterion, train_loader, val_loader, forward, device, s
         val_mse = validate(model, val_loader, device)
         scheduler.step()
         print(f"[P1 E{epoch:03d}] loss={train_loss:.6f} | val_mse={val_mse:.6f} | "
-              f"nll_well={comp['nll_well']:.4f} | kl_z={comp['kl_z']:.4f} | kl_theta={comp['kl_theta']:.4f}")
+              f"nll_well={comp['nll_well']:.4f} | nll_sei={comp['seismic_nll']:.4f}| "
+              f"kl_z={comp['kl_z']:.4f} | kl_theta={comp['kl_theta']:.4f}")
+        #print(f"Phase1 final tau: {model.gating.tau.item()}")  # 监控门控温度
         if val_mse < best_val:
             best_val = val_mse
             torch.save(model.state_dict(), cfg.save_path.replace('.pth', '_phase1_best.pth'))
@@ -186,14 +187,18 @@ def train_vb_mile(model, criterion, train_loader, val_loader, forward, device, s
     print("Phase 2: Gating frozen, weak KL regularization")
     print("="*60)
     model.set_phase(2)
+    model.gating.set_temperature(cfg.final_temperature) 
     # 重新构建优化器（只优化编码器和解码器）
     params = list(model.encoder.parameters()) + list(model.experts.parameters())
     optimizer = torch.optim.AdamW(params, lr=cfg.phase2_lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.phase2_epochs)
-
+    
+    #val_mse_before_train = validate(model, val_loader, device)
+    #print(f"Val MSE before Phase2 training: {val_mse_before_train:.6f}")  # 监控训练阶段过渡
+    
     best_val = float('inf')
     for epoch in range(1, cfg.phase2_epochs + 1):
-        model.set_temperature(epoch, cfg.phase2_epochs)
+        #model.set_temperature(epoch, cfg.phase2_epochs)
         train_loss, comp = train_one_epoch(
             model, train_loader, optimizer, criterion, forward, device, stats,
             epoch=epoch, num_samples=cfg.phase2_num_samples,
@@ -202,7 +207,9 @@ def train_vb_mile(model, criterion, train_loader, val_loader, forward, device, s
         val_mse = validate(model, val_loader, device)
         scheduler.step()
         print(f"[P2 E{epoch:03d}] loss={train_loss:.6f} | val_mse={val_mse:.6f} | "
-              f"nll_well={comp['nll_well']:.4f} | kl_z={comp['kl_z']:.4f} | kl_theta={comp['kl_theta']:.4f}")
+              f"nll_well={comp['nll_well']:.4f} | nll_sei={comp['seismic_nll']:.4f}| "
+              f"kl_z={comp['kl_z']:.4f} | kl_theta={comp['kl_theta']:.4f}")
+        #print(f"Phase2 start tau: {model.gating.tau.item()}")   # 监控门控温度
         if val_mse < best_val:
             best_val = val_mse
             torch.save(model.state_dict(), cfg.save_path)
@@ -268,6 +275,7 @@ def run_test(cfg, model, model_path, test_dataset, device, stats=None):
     z_soft = results['z_soft'][idx]      # (K, H, W)
     expert_mus = results['expert_mus'][idx]  # (K, 3, H, W)
     expert_covs = results['expert_covs'][idx]
+
 
     # 计算指标
     metrics = compute_metrics(pred, true, mask=None)

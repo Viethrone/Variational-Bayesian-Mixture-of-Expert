@@ -1,0 +1,55 @@
+# 公共默认配置：所有具体配置都会继承本文件。
+# 约定：路径一律相对于项目根目录；实验相关的可变参数不写在这里。
+
+exp_name: default          # 会被命令行 --name 覆盖
+seed: 0
+device: auto               # auto | cpu | cuda | mps
+num_workers: 4
+precision: 32              # 16 | 32 | bf16
+
+paths:
+  project_root: .
+  data_raw: data/raw
+  data_interim: data/interim
+  data_processed: data/processed
+  data_external: data/external
+  data_splits: data/splits
+  outputs: outputs
+  runs: outputs/runs
+  figures: figures
+
+logging:
+  level: INFO              # DEBUG | INFO | WARNING | ERROR
+  log_file: logs/run.log   # 相对 run 目录
+  console: true
+  # tensorboard / wandb 按需开启
+  tensorboard: false
+  wandb: false
+  wandb_project: null
+
+checkpoint:
+  save_dir: checkpoints    # 相对 run 目录
+  save_last: true
+  save_best: true
+  metric_for_best: null    # TODO: 例如 rmse / psnr
+  mode: min                # min | max
+
+# 以下区块由具体配置（configs/data、configs/model、configs/inversion 等）覆盖或补全
+data: {}
+model: {}
+forward: {}
+inversion: {}
+prior: {}
+regularizer: {}
+loss: {}
+metrics: {}
+trainer: {}
+
+# 理论口径契约（每次 run 落盘 <run>/theory_contract.json）。
+#   * require_full: true  ⇒ "变分族必须是全协方差"成为**强制**检查（主方法配置打开）；
+#     纯对角的复现/消融保持 false，否则会被整体判成事故。
+#   * strict: true        ⇒ 任一**强制**检查不过即硬失败；默认只告警 + 记录。
+# 加权 KL、learned 噪声、非严格 ELBO 都属**允许口径**，只记录不阻断。
+theory_contract:
+  strict: false
+  require_full: false

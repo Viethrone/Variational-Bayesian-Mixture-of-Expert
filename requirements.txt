@@ -1,0 +1,15 @@
+requirements.txt
+
+# Core dependencies (same set as pyproject.toml).
+numpy>=1.23
+scipy>=1.9
+pyyaml>=6.0
+pandas>=1.5
+matplotlib>=3.6
+scikit-learn>=1.1      # GMM prior fitting (GaussianMixture)
+
+# --- required for training / inference of the neural network ---
+torch>=2.0
+
+# --- optional: development / testing ---
+# pytest>=7.2

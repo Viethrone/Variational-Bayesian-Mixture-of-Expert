@@ -1,0 +1,21 @@
+# 2D 主方法模型：GeoVBMILE(dim=2)（全独立专家 + 空间 FiLM 两阶段训练）。
+# 2D 网络结构在 src/models/vbmile.py::ExpertDecoder2D 中固定（合并输出头、
+# skip2 先卷积后上采样、尾部同尺寸、确定性 reflect 补边），本文件只给骨架与 FiLM 参数；
+# 编码器几何 / 逐专家感受野 / 似然与训练口径在正式配方
+# configs/inversion/vbmile_2d.yaml 中给出。
+_base_:
+  - ../base.yaml
+  - base_vbmile.yaml
+
+exp_name: vbmile_2d_model
+
+model:
+  _target_: vbmile_2d
+  dim: 2
+  base_channels: 16
+  final_temperature: 0.1
+  film_hidden_dim: 8
+  film_kernel_size: 3
+  modulation_scale: 1.0
+  prior_means: null
+  prior_vars: null

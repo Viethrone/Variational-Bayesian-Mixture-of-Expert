@@ -1,0 +1,9 @@
+# 消融：no_kl_theta —— 去掉专家参数分布对先验的 KL(θ) 项（kl_theta_weight=0）。
+# 仅保留井 NLL + 地震 NLL + KL(z)，检验参数先验对不确定性校准的贡献。
+_base_: ../inversion/vbmile_1d.yaml
+
+exp_name: ablation_no_kl_theta
+
+loss:
+  _target_: vbelbo_1d
+  kl_theta_weight: 0.0

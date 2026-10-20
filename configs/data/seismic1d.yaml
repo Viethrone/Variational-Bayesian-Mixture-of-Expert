@@ -1,0 +1,56 @@
+_base_: ../base.yaml
+
+exp_name: seismic_1d_marmousi2
+
+data:
+  _target_: seismic_1d                        # src/data/seismic_dataset.py::Seismic1DDataset
+  name: marmousi2_1d
+  root: data/processed/marmousi2_1d           # 每个数据集独立 processed 命名空间（MANIFEST 不互相覆盖）
+  splits_dir: data/splits
+
+  # data/processed 下重建产物（物理空间数组；dataset 加载时按 norm_stats.json 标准化）
+  files:
+    seismic: seismic6.npy            # (6, 1200, 1360) 观测角道集（0 幅角去掉，余 6 角）
+    target: target.npy               # (3, 1200, 1360) 弹性参数真值 Vp/Vs/Den
+    target_low: target_low_s30.npy   # (3, 1200, 1360) 低频模型（sigma=30 高斯平滑）
+    spatial_prior: spatial_prior.npy # (K, 1200, 1360) 空间先验概率（通道在前）
+    gmm_prior: gmm_prior.npz         # 归一化空间 (K, 3) 专家先验（means/variance）
+
+  target_columns: [Vp, Vs, Den]
+
+  splits:
+    train: data/splits/marmousi2_1d/train.txt
+    val: data/splits/marmousi2_1d/val.txt
+    test: data/splits/marmousi2_1d/test.txt
+
+  shape:
+    observation: [6, 1200]
+    target: [3, 1200]
+
+  normalization:
+    method: standard                 # dataset 内对物理空间做 z-score，统计量来自 stats_file
+    stats_file: data/interim/norm_stats.json
+
+  loader:
+    batch_size: 20
+    shuffle_train: true
+    drop_last: false
+    num_workers: 2
+    pin_memory: false
+
+# ---- run_preprocess 专用区块（build_dataset 不消费）----
+preprocess:
+  root: data/processed/marmousi2_1d
+  interim_dir: data/interim
+  splits_dir: data/splits
+  raw:
+    observations: data/raw/observations
+    priors: data/raw/priors
+  low_sigma: 30                      # 1D 口径 gaussian_filter(target, sigma=30, axes=(1,2))
+  num_train: 12
+  num_val: 7
+  train_start: 20
+  train_end: 1300
+  val_start: 30
+  val_end: 1300
+  dtype: float32

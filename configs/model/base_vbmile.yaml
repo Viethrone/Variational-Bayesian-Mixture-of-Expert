@@ -1,0 +1,29 @@
+# 主方法（Geo-VB-MILE）模型公共配置。
+# vbmile_1d / vbmile_2d 继承本文件，只覆盖 dim 与架构差异。兼容 legacy 训练口径：
+# inputs=6 角 + 3 低频，norm=group，先验偏置初始化由 data 提供（data/gmm_prior.npz）。
+_base_: ../base.yaml
+
+exp_name: vbmile_model
+
+model:
+  _target_: vbmile_1d              # 子配置覆盖为 vbmile_2d
+  dim: 1
+  seismic_channels: 6
+  low_freq_channels: 3
+  base_channels: 16
+  norm_type: group
+  num_experts: 3
+  initial_temperature: 1.0
+  final_temperature: 0.05
+  # 若不需要 GMM 先验初始化可置空（prior_means/prior_vars 注册为单位先验 buffer）
+  prior_means: null
+  prior_vars: null
+  # 2D 专家解码器 FiLM 参数（1D 分支忽略）
+  film_hidden_dim: 8
+  film_kernel_size: 3
+  modulation_scale: 1.0
+  # 变分后验族：diag（默认 = 6 通道头，对齐已发布的 1D checkpoint）/
+  # full（每专家 +3 通道 off-diagonal，Σ = LLᵀ）；1D / 2D 主方法配置均用 full。
+  # ⚠ full + 全协方差 GMM 先验时**必须成对**设置 model.prior_cov_shrinkage（0.05–0.1）：
+  # 先验近奇异（cond 可达 5804），不收缩会把后验方差压到 0。
+  variational_covariance: diag

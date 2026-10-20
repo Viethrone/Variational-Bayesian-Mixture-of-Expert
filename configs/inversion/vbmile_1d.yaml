@@ -1,0 +1,64 @@
+# 主方法 1D 训练配置：Geo-VB-MILE（dim=1）—— **正式配方（交付口径）**。
+#
+# 全协方差变分后验（`variational_covariance: full`）+ **闭式（解析期望）井似然**
+# （`well_nll_mode: expert`）+ 加权 KL（单温度 c=0.01：两个 KL 权重必须相等）。
+# 依据 docs/全协方差理论严格改造说明.md：
+#   * 全协方差必选 —— 对角换成 full 不损失精度（Δ 全在噪声地板内）；
+#   * 严格 ELBO 可选 —— c=1 在单位先验下把 θ 强拉向 N(0,I)，实测 ΣR² 明显变差，
+#     故正式口径必须加权；c=0.01 与对角锚点同水平；
+#   * 井似然用解析期望（闭式、无采样），是唯一能配合 full 变分拿到 tr(Σ_k) 的口径；
+#   * 地震项弱权重 0.03（权重扫描：w∈[0,0.3] 是平台，旧默认 1.0 全场最差）。
+# 全剖面 R²（test 1360 道，seed 0）：Vp 0.9766 / Vs 0.9761 / Den 0.9508。
+_base_:
+  - ../base.yaml
+  - ../data/seismic1d.yaml
+  - ../model/vbmile_1d.yaml
+
+exp_name: vbmile_1d
+
+model:
+  variational_covariance: full     # 必选项：q(θ|z=k) = N(μ_k, Σ_k)
+
+forward:
+  _target_: synthetic_seismic      # trainer 用可微正演（物理真相 -> 合成角道集）
+  dim: 1
+  angles_deg: [5, 10, 15, 20, 25, 30]
+  wavelet:                         # Ricker 子波参数（自动生成）
+    dt: 0.002
+    f: 20.0
+    length: 0.1
+
+loss:
+  _target_: vbelbo_1d
+  seismic_obs_noise_init: 5.0
+  well_obs_noise_init: 1.0
+  clip_diff: 10.0
+  well_nll_mode: expert            # 解析期望 E_q[−log p(y|θ)]（闭式，无采样）
+  # 单温度：两个 KL 权重必须相等，否则退回"权重互不相等"的旧口径（写不成 c·KL）
+  kl_z_weight: 0.01
+  kl_theta_weight: 0.01
+  expert_lambdas: null             # 逐专家 λ̂ 与单温度不可同时成立
+  seismic_weight: 0.03             # 地震似然弱权重（有效强度 κ = w/σ²_seis 才是真旋钮）
+
+trainer:
+  _target_: vbmile
+  max_epochs: 500
+  lr: 1.0e-3
+  weight_decay: 1.0e-2
+  warmup_epochs: 50
+  warmup_start_lr: 1.0e-6
+  lr_min: 1.0e-4
+  grad_clip: 1.0
+  batch_size: 20
+  shuffle_train: true
+
+# 变分族不是 full ⇒ 强制口径事故（strict 下拒绝启动）
+theory_contract:
+  require_full: true
+
+metrics:
+  - rmse
+  - r2
+  - pearson
+  - mae
+  - ssim

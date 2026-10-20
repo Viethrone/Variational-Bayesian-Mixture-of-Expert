@@ -1,0 +1,10 @@
+# 消融：no_spatial_prior —— 不给 partition 层提供空间先验（meta.prior=None，
+# 模型内部退化为均匀地表先验）。数据集中 ``files.spatial_prior: null`` 即关闭
+# 空间先验的加载（km 层 _load_cube 把空条目当未配置）。
+_base_: ../inversion/vbmile_1d.yaml
+
+exp_name: ablation_no_spatial_prior
+
+data:
+  files:
+    spatial_prior: null

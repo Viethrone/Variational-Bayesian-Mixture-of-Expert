@@ -1,0 +1,10 @@
+# 消融：gaussian_prior —— 参数先验为单高斯（训练目标全局 z-score 统计），
+# 而非 legacy 的 3 模态 GMM。run_main 对 ``prior._target_: gaussian`` 注入
+# (K,3) 重复的单高斯均值/方差（K = num_experts）。目标经 z-score 归一化后
+# 该先验趋近 N(0, I) —— 与 GMM 模态离散结构形成对照。
+_base_: ../inversion/vbmile_1d.yaml
+
+exp_name: ablation_gaussian_prior
+
+prior:
+  _target_: gaussian

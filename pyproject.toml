@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geo-vb-mile"
+version = "1.0.0"
+description = "Geo-VB-MILE: Variational Bayesian Mixture-of-Experts for seismic elastic-parameter inversion (1D/2D, Marmousi2)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["seismic inversion", "variational bayes", "mixture of experts", "AVA", "Marmousi2"]
+
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.9",
+    "pyyaml>=6.0",
+    "pandas>=1.5",
+    "matplotlib>=3.6",
+    "scikit-learn>=1.1",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.0"]
+dev = [
+    "pytest>=7.2",
+]
+
+# ``src`` is used as a top-level package (import src.utils, src.models, ...) so that
+# common names such as data / metrics / models do not collide at site-packages top level.
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "experiments*", "tools*"]
+namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]

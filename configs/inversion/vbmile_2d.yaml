@@ -1,0 +1,95 @@
+# 主方法 2D 训练配置：Geo-VB-MILE（dim=2），两阶段训练 —— **正式配方**。
+#
+# 2D 网络结构本身是固定的（合并 6 通道输出头、skip2 先卷积后上采样、尾部同尺寸、
+# reflect 补边走确定性拷贝算子），见 src/models/vbmile.py::ExpertDecoder2D；
+# 配置侧只剩三个自由度：
+#   * 编码器几何：`encoder_downsample: aniso`（窄道轴自适应下采样）；
+#   * 逐专家感受野：`expert_dilations: [7, 15, 7]`（dilation 不改参数量）；
+#   * 似然与训练口径：全协方差变分后验、地震项 `deviatoric` + 弱权重 0.03、
+#     Gumbel 温度 2.0 → 0.1、stage1 lr 5e-4、两个阶段共 300 epoch。
+# 井似然保持 **marginal + λ̂（Eq.21）**：在现行基座上换专家级闭式期望没有收益。
+# 数据侧的确定性协议（`num_workers: 0`、`explicit_generator: true`）在
+# configs/data/seismic2d.yaml 中给出。
+_base_:
+  - ../base.yaml
+  - ../data/seismic2d.yaml
+  - ../model/vbmile_2d.yaml
+
+exp_name: vbmile_2d
+
+# 确定性协议（位级可复现）：cudnn 确定性 + 严格确定性算法
+deterministic: true
+deterministic_algorithms: true
+
+model:
+  encoder_downsample: aniso        # 窄道轴自适应下采样（窗宽 15 下 skip2 保持 6 列）
+  min_down_size: 3
+  variational_covariance: full     # 必选项：q(θ|z=k) = N(μ_k, Σ_k)
+  initial_temperature: 2.0         # Gumbel 温度 2.0 → 0.1（final 在 model 配置中）
+  prior_cov_shrinkage: 0.1         # 全协方差 GMM 先验收缩（full q 下必须成对开启）
+  expert_dilations: [7, 15, 7]     # 逐专家感受野（dilation 不改参数量）
+
+# GMM 参数先验（归一化空间）从 data 的 gmm_prior.npz 注入：输出头偏置初始化 + KL(θ) 的先验；
+# full q 下与 model.prior_cov_shrinkage 成对出现（收缩只在全协方差先验上生效）
+prior:
+  _target_: gmm
+
+forward:
+  _target_: synthetic_seismic      # 可微 Aki-Richards + Ricker（物理真相 -> 合成角道集）
+  dim: 2
+  angles_deg: [5, 10, 15, 20, 25, 30]
+  wavelet:
+    dt: 0.002
+    f: 20.0
+    length: 0.1
+
+loss:
+  _target_: vbelbo_2d
+  seismic_obs_noise_init: 1.0
+  well_obs_noise_init: 0.1
+  clip_diff: 10.0
+  kl_z_weight: 0.01          # 阶段 1 / 2 再按 phases 覆盖
+  kl_theta_weight: 0.1
+  expert_lambdas: [0.4831, 0.1668, 1.0]   # 逐专家 KL 权重（λ̂_k = I_k / max_i I_i）
+  seismic_weight: 0.03       # 弱约束；0.3 会全面倒退，0.03–0.1 是平台
+  seismic_noise: deviatoric  # 沿道轴边缘化共模，只约束道间差异
+  seismic_white_noise_init: 0.4224
+
+trainer:
+  _target_: vbmile
+  max_epochs: 300
+  lr: 1.0e-2
+  weight_decay: 1.0e-2
+  warmup_epochs: 10
+  warmup_start_lr: 1.0e-6
+  lr_min: 1.0e-4
+  grad_clip: 1.0
+  batch_size: 2                       # 2D 切片 batch（每批含 2 个井位窗口）
+  shuffle_train: true
+  # 两阶段：阶段 1 联合训练（含门控+KL），阶段 2 冻结门控强化专家精修。
+  # 键名与 src/trainers/vbmile_trainer.py::_apply_phase 一致。
+  # stage1 的 lr 在首个阶段就会生效（_phase_lr(0) 建优化器）。
+  phases:
+    - name: joint
+      epochs: 50
+      lr: 5.0e-4
+      kl_z_weight: 0.01
+      kl_theta_weight: 0.1
+      freeze_gating: false
+    - name: expert_refine
+      epochs: 250
+      lr: 1.0e-3
+      kl_z_weight: 1.0e-3
+      kl_theta_weight: 1.0e-3
+      freeze_gating: true
+
+# 变分族不是 full ⇒ 强制口径事故（strict 下拒绝启动）
+theory_contract:
+  require_full: true
+
+metrics:
+  - rmse
+  - r2
+  - pearson
+  - mae
+  - ssim

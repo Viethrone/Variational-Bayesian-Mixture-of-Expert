@@ -25,6 +25,7 @@ from typing import List, Optional, Union
 import torch
 import torch.nn as nn
 
+from src.forward.reliability import mask_stats, masked_mean
 from src.losses.base import LOSSES
 from src.utils.fullcov import build_chol
 
@@ -76,6 +77,20 @@ class VBELBOCore(nn.Module):
             (unused for ``"iid"``).
         seismic_white_noise_init: initial white (trace-to-trace) noise standard deviation
             (unused for ``"iid"``).
+        seismic_mask_mode: per-angle reliability masking of the seismic likelihood,
+            ``"none"`` (default) or ``"critical_angle"``. ``"critical_angle"`` multiplies
+            every per-angle NLL element by a weight built from the analytic critical angle
+            of each interface (:mod:`src.forward.reliability`): unity below
+            ``theta_c - taper``, a cosine taper down to ``floor`` across the band and
+            ``floor`` (default 0) beyond ``theta_c``; the residual is then reduced as
+            ``sum(w * nll) / sum(w)`` so the reliable region keeps its full strength.
+            ``"none"`` bypasses the mechanism and reproduces the released numbers bit for
+            bit - the ``loss_dict`` key set is unchanged as well.
+        seismic_mask_layer_sigma: depth smoothing scale (in samples) applied to Vp before
+            the critical angle is evaluated; ``0`` (default) uses adjacent samples, which
+            is exactly what the forward difference stencil does.
+        seismic_mask_taper_deg: width (degrees) of the cosine taper below ``theta_c``.
+        seismic_mask_floor: weight kept beyond ``theta_c``, in ``[0, 1]`` (default 0).
     """
 
     def __init__(self,
@@ -90,7 +105,11 @@ class VBELBOCore(nn.Module):
                  noise_mode: str = "learned",
                  seismic_noise: str = "iid",
                  seismic_coh_noise_init: float = 1.0,
-                 seismic_white_noise_init: float = 1.0):
+                 seismic_white_noise_init: float = 1.0,
+                 seismic_mask_mode: str = "none",
+                 seismic_mask_layer_sigma: float = 0.0,
+                 seismic_mask_taper_deg: float = 5.0,
+                 seismic_mask_floor: float = 0.0):
         super().__init__()
         if noise_mode not in ("learned", "fixed"):
             raise ValueError(f"noise_mode must be learned or fixed, got {noise_mode!r}")
@@ -141,6 +160,33 @@ class VBELBOCore(nn.Module):
                 # at a very large value and never optimised
                 self.register_buffer("_seis_coh_var_fixed", torch.tensor(1.0e6))
             self.log_seismic_white_var = nn.Parameter(torch.tensor(math.log(sw2)))
+
+        # ---- per-angle reliability masking (opt-in; "none" = bit-wise legacy) ----
+        # Motivation (reviewer question): Aki-Richards is a *weak* physics constraint that
+        # is systematically wrong near/beyond the critical angle, so an iid likelihood fits
+        # that directed error as information and pushes the network off the true model.
+        # All four are plain attributes (no Parameter/buffer), so the state_dict key set is
+        # unchanged. Measured on Marmousi2 (2026-10-22 census): the most critical interface
+        # has theta_c = 32.8 deg and the fraction of interfaces with theta_c <= 30 deg is
+        # 0.00%, so a hard theta >= theta_c mask is a strict no-op on 5-30 deg data; only
+        # the taper band touches <= 0.04% of the pixels.
+        if seismic_mask_mode not in ("none", "critical_angle"):
+            raise ValueError(
+                "seismic_mask_mode must be none/critical_angle, "
+                f"got {seismic_mask_mode!r}")
+        if float(seismic_mask_layer_sigma) < 0.0:
+            raise ValueError(
+                f"seismic_mask_layer_sigma must be >= 0, got {seismic_mask_layer_sigma!r}")
+        if float(seismic_mask_taper_deg) < 0.0:
+            raise ValueError(
+                f"seismic_mask_taper_deg must be >= 0, got {seismic_mask_taper_deg!r}")
+        if not 0.0 <= float(seismic_mask_floor) <= 1.0:
+            raise ValueError(
+                f"seismic_mask_floor must be in [0, 1], got {seismic_mask_floor!r}")
+        self.seismic_mask_mode = str(seismic_mask_mode)
+        self.seismic_mask_layer_sigma = float(seismic_mask_layer_sigma)
+        self.seismic_mask_taper_deg = float(seismic_mask_taper_deg)
+        self.seismic_mask_floor = float(seismic_mask_floor)
 
         self.kl_z_weight = float(kl_z_weight)
         self.kl_theta_weight = float(kl_theta_weight)
@@ -287,15 +333,26 @@ class VBELBOCore(nn.Module):
         nll = -torch.logsumexp(log_q - nll_k, dim=1)               # (B,3,...)
         return self._reduce_well_nll(nll, mask)
 
-    def _nll_seismic(self, syn, obs):
-        """Seismic likelihood: NLL of p(d | theta_sample) under the configured noise model."""
+    def _nll_seismic(self, syn, obs, mask_weight=None):
+        """Seismic likelihood: NLL of p(d | theta_sample) under the configured noise model.
+
+        Args:
+            mask_weight: per-angle reliability weight (opt-in). ``None`` (the default)
+                returns ``nll.mean()`` unchanged and therefore stays bit-wise identical to
+                the released implementation. When given, the residual is reduced as
+                ``sum(w * nll) / sum(w)`` (``masked_mean``), i.e. averaged over the
+                reliable region only, so masking deletes information without weakening the
+                surviving constraints.
+        """
         diff = (syn - obs).clamp(-self.clip_diff, self.clip_diff)
         if self.seismic_noise != "iid":
             nll = self._nll_seis_corr(diff)
         else:
             nll = 0.5 * (diff**2 / self.seismic_var + self.log_two_pi + torch.log(self.seismic_var))
         nll = torch.nan_to_num(nll, nan=0.0, posinf=1e6, neginf=-1e6)
-        return nll.mean()
+        if mask_weight is None:
+            return nll.mean()
+        return masked_mean(nll, mask_weight)
 
     # ---- seismic noise model: coherent (trace common mode) + white (trace difference) ----
     @property
@@ -395,7 +452,7 @@ class VBELBOCore(nn.Module):
         }
 
     def forward(self, model_output, target, syn_norm=None, seismic=None,
-                mask=None, target_mask=None):
+                mask=None, target_mask=None, seismic_mask_weight=None):
         """Compute the negative ELBO.
 
         Args:
@@ -405,6 +462,13 @@ class VBELBOCore(nn.Module):
                 normalized seismic domain. ``None`` skips the seismic term.
             seismic: ``(B, n_angles, ...)`` observed gathers (normalized).
             mask / target_mask: well-label mask.
+            seismic_mask_weight: per-angle reliability weights (opt-in, default ``None`` =
+                off), shaped like ``syn_norm`` and computed by the trainer from the
+                *physical* theta values (:func:`src.forward.reliability.critical_angle_weights`).
+                ``None`` bypasses the mechanism entirely and keeps the released numbers
+                bit-wise identical; when the criterion was built with
+                ``seismic_mask_mode="critical_angle"`` but the weight is missing, a
+                ``ValueError`` is raised instead of silently degrading to no masking.
 
         Returns:
             ``(neg_elbo, loss_dict)``
@@ -433,8 +497,34 @@ class VBELBOCore(nn.Module):
             nll_well = self._nll_well(mu, logvar, target, mask)
 
         seismic_nll = torch.tensor(0.0, device=mu.device)
+        # Mask occupancy, filled only when a weight is actually passed; with
+        # seismic_mask_mode="none" neither key appears in ``loss_dict``.
+        mask_occupancy = None
+        mask_occupancy_energy = None
         if syn_norm is not None and seismic is not None:
-            seismic_nll = self.seismic_weight * self._nll_seismic(syn_norm, seismic)
+            if seismic_mask_weight is None:
+                # default path: identical to the released implementation, line for line
+                if self.seismic_mask_mode != "none":
+                    # a configured switch without the weight means the declared convention
+                    # and what is computed have diverged => fail loudly instead of silently
+                    # running without masking.
+                    raise ValueError(
+                        f"seismic_mask_mode={self.seismic_mask_mode!r} requires the caller to "
+                        "pass seismic_mask_weight (VBEMLETrainer computes it from the physical "
+                        "theta values); got None => silent fallback to no masking, which "
+                        "contradicts the configuration.")
+                seismic_nll = self.seismic_weight * self._nll_seismic(syn_norm, seismic)
+            else:
+                if tuple(seismic_mask_weight.shape) != tuple(syn_norm.shape):
+                    raise ValueError(
+                        "seismic_mask_weight shape does not match syn_norm: "
+                        f"{tuple(seismic_mask_weight.shape)} vs {tuple(syn_norm.shape)}")
+                seismic_nll = self.seismic_weight * self._nll_seismic(
+                    syn_norm, seismic, seismic_mask_weight)
+                # occupancy convention: mean over **all** (B, n_angles, *spatial) weight
+                # elements, i.e. ``1 - mean(w)`` (not only the elements driven to 0).
+                mask_occupancy, mask_occupancy_energy = mask_stats(
+                    seismic_mask_weight, syn_norm - seismic)
 
         kl_z = model_output["kl_z"]
 
@@ -478,6 +568,12 @@ class VBELBOCore(nn.Module):
         if self.seismic_noise != "iid":
             loss_dict["seismic_coh_var"] = self.seismic_coh_var.detach()
             loss_dict["seismic_white_var"] = self.seismic_white_var.detach()
+        # reliability masking: present only when a weight was passed, so the default
+        # ("none") key set is unchanged
+        if mask_occupancy is not None:
+            loss_dict["seismic_mask_occupancy"] = mask_occupancy
+            if mask_occupancy_energy is not None:
+                loss_dict["seismic_mask_occupancy_energy"] = mask_occupancy_energy
         return neg_elbo, loss_dict
 
 

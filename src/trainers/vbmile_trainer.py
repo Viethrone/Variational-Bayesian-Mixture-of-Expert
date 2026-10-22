@@ -27,6 +27,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+from src.forward.reliability import critical_angle_weights
 from src.trainers.base import TRAINERS, BaseTrainer, TrainerConfig
 from src.utils.logging_utils import get_logger
 from src.utils.lr_scheduler import LinearWarmupCosineAnnealingLR
@@ -545,6 +546,67 @@ class VBEMLETrainer(BaseTrainer):
         ss = seismic_std.reshape(1, -1, *([1] * (syn_phys.dim() - 2)))
         return (syn_phys - sm) / (ss + 1e-8)
 
+    def _seismic_mask_weight(self, theta_norm: torch.Tensor, stats: dict[str, torch.Tensor],
+                             criterion) -> Optional[torch.Tensor]:
+        """Per-angle reliability weights from the **physical** theta values (opt-in; ``None``
+        when the switch is off).
+
+        The convention matches the Aki-Richards forward operator exactly: the reflection
+        coefficient is built from adjacent depth samples, so ``vp1 = vp[..., :-1]``
+        (overburden), ``vp2 = vp[..., 1:]`` (underburden) and ``theta_c = arcsin(vp1/vp2)``
+        (``90 deg`` when ``vp2 <= vp1``).
+
+        Args:
+            theta_norm: ``(N, 3, ...)`` normalized theta; ``N`` may be the batch size.
+            stats: normalization statistics (the same dict as ``_syn_norm``).
+            criterion: ``VBELBOCore``; the switch values are read from its plain attributes
+                (``seismic_mask_mode`` / ``_layer_sigma`` / ``_taper_deg`` / ``_floor``).
+
+        Returns:
+            ``(N, n_angles, *spatial)`` weights, detached (the mask must not be changed by
+            the backward pass), shaped exactly like ``_syn_norm``'s output. With
+            ``mode == "none"`` this returns ``None``, so the loss takes the legacy branch and
+            computes nothing extra.
+
+        Note:
+            The trainer is built **after** the criterion is injected (see
+            ``experiments/main/run_main.py``), so the switch is read per batch here instead
+            of being cached in ``__init__``.
+        """
+        mode = str(getattr(criterion, "seismic_mask_mode", "none"))
+        if mode == "none":
+            return None
+        if mode != "critical_angle":
+            raise ValueError(
+                f"unknown seismic_mask_mode={mode!r} (only none/critical_angle are supported)")
+        angles_rad = getattr(self.forward, "angles_rad", None)
+        if angles_rad is None:
+            raise ValueError(
+                "seismic_mask_mode='critical_angle' needs a forward object with angles_rad "
+                "(SeismicForward has it; the current forward does not)")
+        nd_sp = theta_norm.dim() - 2
+        with torch.no_grad():
+            tm = stats["target_mean"].reshape(1, -1, *([1] * nd_sp))
+            ts = stats["target_std"].reshape(1, -1, *([1] * nd_sp))
+            theta_phys = theta_norm * ts + tm
+            vp = theta_phys[:, 0]                   # (N, *spatial); channel 0 = Vp
+            # 1-D keeps depth last; in 2-D (N, H, W) depth is -2 (the axis seismic.py uses)
+            depth_dim = -1 if theta_norm.dim() == 3 else -2
+            w = critical_angle_weights(
+                vp,
+                torch.rad2deg(angles_rad.detach().to(vp.device, vp.dtype).reshape(-1)),
+                layer_sigma=float(getattr(criterion, "seismic_mask_layer_sigma", 0.0)),
+                taper_deg=float(getattr(criterion, "seismic_mask_taper_deg", 5.0)),
+                floor=float(getattr(criterion, "seismic_mask_floor", 0.0)),
+                depth_dim=depth_dim,
+            )
+        expected = (theta_norm.shape[0], int(angles_rad.numel()), *theta_norm.shape[2:])
+        if tuple(w.shape) != expected:
+            raise ValueError(
+                f"reliability weight shape {tuple(w.shape)} does not match the synthetic "
+                f"gather shape {expected}")
+        return w.detach()
+
     # ---- one epoch ----
     def _train_one_epoch(self, model, criterion, optimizer, epoch, stats) -> tuple:
         model.train()
@@ -568,16 +630,25 @@ class VBEMLETrainer(BaseTrainer):
             model_output = model(seismic, target_low, spatial_prior, num_samples=1)
 
             syn_norm = None
+            # per-angle reliability weights (opt-in): stays None while the switch is off,
+            # so the criterion receives exactly the legacy keyword arguments and computes
+            # nothing extra.
+            mask_weight = None
             if self.forward is not None and stats_ready:
-                syn_norm = self._syn_norm(model_output["theta_sample"], stats)
+                theta_norm = model_output["theta_sample"]
+                syn_norm = self._syn_norm(theta_norm, stats)
+                mask_weight = self._seismic_mask_weight(theta_norm, stats, criterion)
 
-            loss, loss_dict = criterion(
+            crit_kwargs = dict(
                 model_output=model_output,
                 target=target,
                 syn_norm=syn_norm,
                 seismic=seismic,
                 mask=mask,
             )
+            if mask_weight is not None:
+                crit_kwargs["seismic_mask_weight"] = mask_weight
+            loss, loss_dict = criterion(**crit_kwargs)
             loss.backward()
             if self.grad_clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(self.grad_clip))

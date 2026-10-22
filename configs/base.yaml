@@ -42,6 +42,17 @@ inversion: {}
 prior: {}
 regularizer: {}
 loss: {}
+# 地震似然的 per-angle 可靠性遮蔽（opt-in，默认**关闭**；实现见 src/forward/reliability.py）。
+# 不写下面这些键 = mode: none ⇒ 数值路径与 legacy 逐位一致（连 loss_dict 键集都不变）。
+# 用法（写进具体臂的 loss 段，或用命令行覆盖 loss.xxx）：
+#   seismic_mask_mode: critical_angle    # none | critical_angle
+#   seismic_mask_layer_sigma: 0.0        # θc 的深度平滑尺度（单位=样点）；0=相邻样点口径
+#   seismic_mask_taper_deg: 5.0          # 过临界前的余弦过渡带（度）
+#   seismic_mask_floor: 0.0              # 过临界区保留的最小权重
+# 提醒（2026-10-22 临界角普查，Marmousi2）：最临界界面 θc=32.8°，θc≤30° 的界面占比 0.00%
+# ⇒ 在 5–30° 数据上"θ≥θc 硬遮蔽"是空操作；只有 taper 带边缘会压到 ≤0.04% 的像素。
+# 开启后 loss_dict 多出 seismic_mask_occupancy（=1−mean(w)，分母=全部 (B,A,样点) 权重
+# 元素）与 seismic_mask_occupancy_energy（被压到 0 的权重覆盖的残差能量占比）。
 metrics: {}
 trainer: {}
 

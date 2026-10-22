@@ -109,6 +109,46 @@ Together with `deterministic: true` + `deterministic_algorithms: true` a same-se
 bit-wise identical.
 
 
+### Seismic reliability masking (optional)
+
+`src/forward/reliability.py` implements a per-angle weight on the seismic likelihood. It is
+**off by default**, and switching it on is the only thing needed:
+
+```yaml
+loss:
+  seismic_mask_mode: critical_angle   # none (default) | critical_angle
+  seismic_mask_layer_sigma: 0.0       # depth smoothing of Vp, in samples; 0 = adjacent samples
+  seismic_mask_taper_deg: 5.0         # cosine transition band below theta_c
+  seismic_mask_floor: 0.0             # weight kept beyond theta_c, in [0, 1]
+```
+
+The weight is built from the **analytic critical angle** of every interface, matching the
+adjacent-sample stencil of the forward operator (`vp1 = vp[..., :-1]`, `vp2 = vp[..., 1:]`,
+`theta_c = arcsin(vp1 / vp2)`, `90 deg` when `vp2 <= vp1`): unity below `theta_c - taper`, a
+cosine taper down to `floor` across the band, and `floor` beyond `theta_c`. Masked angles then
+receive exactly zero gradient, while the reliable region is reduced as `sum(w * nll) / sum(w)`
+so it keeps its full strength — masking deletes information, it does not weaken the surviving
+constraint. `loss_dict` gains `seismic_mask_occupancy` (`1 - mean(w)`, denominator = all
+`(B, n_angles, *spatial)` elements) and `seismic_mask_occupancy_energy` (fraction of residual
+energy covered by zero weights).
+
+Why it is not a default: on the 5–30° Marmousi2 data it is a **strict no-op**. Every one of
+the 1.63×10⁶ adjacent-sample interfaces has `theta_c >= 32.8 deg` (median 88.5°), so no
+interface is post-critical inside the acquisition range and a hard `theta >= theta_c` mask
+removes 0.0000% of the seismic gradient energy; only the default taper edge touches ≤0.04% of
+the pixels (and the most critical interface is the strongest one). The switch is meant for
+wider-angle data, where Aki–Richards really degrades (median per-trace PCC against exact
+Zoeppritz: 0.982 / 0.860 / 0.828 at 35 / 40 / 45°).
+
+Two further cautions are baked into the implementation: `seismic_mask_mode="critical_angle"`
+**raises** if the trainer does not supply a weight (a silent fallback would let the declared
+convention diverge from what is computed), and weighting by residual magnitude is deliberately
+not offered — residual is data noise + operator error + model error, and suppressing the large
+residuals is most harmful exactly where the model should be updated. For a common-mode
+(angle-flat) mismatch the right tool is the marginalisation in `loss.seismic_noise`
+(`deviatoric`), not masking.
+
+
 ## Install
 
 ```bash
@@ -383,7 +423,7 @@ vbmile-open/
 ├── src/                      reusable library (registry driven)
 │   ├── data/                 Seismic1DDataset / Seismic2DDataset, normalization helpers
 │   ├── forward/              Aki-Richards + Ricker forward, Connolly EI / exact Zoeppritz,
-│   │                         wavelets
+│   │                         wavelets, per-angle reliability weighting (opt-in)
 │   ├── models/               GeoVBMILE (1-D and 2-D)
 │   ├── priors/               GMMPriorFitter / SpatialPriorGenerator / GMMPrior
 │   ├── losses/               VBELBOCore (negative ELBO)
@@ -414,14 +454,16 @@ mechanics, all well-NLL modes, the full-covariance posterior (zero-off-diagonal 
 closed-form KL against `torch.distributions`, sampling covariance, expert-level well
 likelihood, batch-invariant pixel masks, the theory contract and its checks), the 2-D
 structure (merged output head, skip2 ordering, same-size tail, per-expert dilations,
-deterministic padding), the deviatoric seismic likelihood, the stage-1 learning rate and
+deterministic padding), the deviatoric seismic likelihood, the per-angle reliability masking
+(critical-angle weights 1-D/2-D, exact zero gradient on masked angles, occupancy reporting,
+bit-wise legacy path when the switch is off), the stage-1 learning rate and
 `checkpoint.save_last`, the GMM prior and fitter, the forward operators, the dataset
 contract, the 2-D sliding-window protocol and its width floor, and the legacy 1-D
 state-dict compatibility check.
 
 Tests that need the rebuilt dataset skip automatically when `data/processed/` is absent
 (see `tests/conftest.py`), so a fresh clone is green out of the box; with the data
-prepared, the full suite (126 tests) runs and passes.
+prepared, the full suite (146 tests) runs and passes.
 
 ## Citation
 

@@ -422,13 +422,13 @@ vbmile-open/
 │   └── ablations/{no_prior,gaussian_prior,no_spatial_prior,no_kl_theta}.yaml
 ├── src/                      reusable library (registry driven)
 │   ├── data/                 Seismic1DDataset / Seismic2DDataset, normalization helpers
-│   ├── forward/              Aki-Richards + Ricker forward, Connolly EI / exact Zoeppritz,
-│   │                         wavelets, per-angle reliability weighting (opt-in)
+│   ├── forward/              Aki-Richards + Ricker forward, wavelets, per-angle
+│   │                         reliability weighting (opt-in)
 │   ├── models/               GeoVBMILE (1-D and 2-D)
 │   ├── priors/               GMMPriorFitter / SpatialPriorGenerator / GMMPrior
 │   ├── losses/               VBELBOCore (negative ELBO)
 │   ├── trainers/             VBEMLETrainer (single- and two-phase)
-│   ├── metrics/              rmse / mae / r2 / pearson / ssim / psnr / ...
+│   ├── metrics/              rmse / mae / r2 / pearson / ssim
 │   └── utils/                config, registry, run metadata, seeds, lr scheduler,
 │                             fullcov (3x3 Cholesky operators), theory_contract
 ├── experiments/

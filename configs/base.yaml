@@ -31,7 +31,7 @@ checkpoint:
   save_dir: checkpoints    # 相对 run 目录
   save_last: true
   save_best: true
-  metric_for_best: null    # TODO: 例如 rmse / psnr
+  metric_for_best: null    # 例如 rmse / r2
   mode: min                # min | max
 
 # 以下区块由具体配置（configs/data、configs/model、configs/inversion 等）覆盖或补全

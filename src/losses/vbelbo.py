@@ -33,7 +33,11 @@ __all__ = ["VBELBOCore"]
 
 
 class VBELBOCore(nn.Module):
-    """Negative ELBO loss with learnable (or fixed) observation noise variances.
+    """Negative ELBO loss for Geo-VB-MILE.
+
+    The objective is::
+
+        neg_elbo = nll_well + seismic_nll + kl_z_weight * KL(z) + kl_theta_weight * KL(theta)
 
     Args:
         seismic_obs_noise_init: initial seismic observation noise standard deviation.
@@ -41,56 +45,36 @@ class VBELBOCore(nn.Module):
         clip_diff: residual clipping magnitude (outlier suppression).
         kl_z_weight: weight of the gating KL term.
         kl_theta_weight: weight of the parameter KL term.
-        seismic_weight: weight of the seismic likelihood term (set to 0 to disable it).
-        expert_lambdas: per-expert weights for ``KL(theta)`` (``(K,)`` tensor or list).
+        seismic_weight: weight of the seismic likelihood term (0 disables it).
+        expert_lambdas: per-expert weights for ``KL(theta)`` (``(K,)`` tensor or list);
             ``None`` means uniform weighting.
-        well_nll_mode: how the well likelihood term is evaluated.
+        well_nll_mode: well-likelihood convention.
 
-            * ``"marginal"`` (default) — the Gaussian NLL of the **moment-matched
-              marginal** ``q(theta|x)``, i.e. ``N(y; mu_marg, sigma_y^2 + Var_marg)`` with
-              ``mu_marg = sum_k z_k mu_k``. The 2-D recipe uses this.
-            * ``"expert"`` — the analytic expectation
-              ``E_q[-log p(y|theta)] = 1/(2 sigma_y^2) sum_k pi_k (|y - mu_k|^2 +
-              tr(Sigma_k)) + D/2 log(2 pi sigma_y^2)``. Needs the full-covariance
-              posterior (``tr(Sigma_k)``); the 1-D recipe uses this.
-            * ``"mixture"`` — the exact mixture ELBO
-              ``-logsumexp_k(log q_k - nll_k)`` with ``nll_k`` using
-              ``sigma_y^2 + sigma_k^2``.
-            * ``"mixture_predictive"`` — ``-log sum_k pi_k N(y; mu_k, sigma_y^2 I +
-              Sigma_k)``; unlike ``"expert"`` this uses the off-diagonal structure.
-        noise_mode: ``"learned"`` (default) makes both observation variances learnable;
-            ``"fixed"`` turns them into buffers fixed at their initial values, matching a
-            paper statement of fixed noise.
-        seismic_noise: noise model of the seismic likelihood, ``"iid"`` (default),
-            ``"coherent"`` or ``"deviatoric"``.
-
-            The forward operator does **not** match the observed gathers exactly: the
-            remaining operator mismatch is almost perfectly coherent along the trace axis
-            (autocorrelation at lag 1 ≈ 1.00), so an iid Gaussian likelihood counts the
-            same common-mode error once per trace. ``"coherent"`` models this explicitly
-            with a covariance ``C = sigma_c^2 * 11^T + sigma_w^2 * I`` along the trace
-            axis (a learnable common-mode variance plus a white one);
-            ``"deviatoric"`` marginalises the common mode (``sigma_c^2 -> inf``, fixed,
-            not learned) so the term only constrains the trace-to-trace (deviatoric) part
-            of the residual. Both are 2-D only — in 1-D the last axis is depth.
-        seismic_coh_noise_init: initial common-mode noise standard deviation
-            (unused for ``"iid"``).
-        seismic_white_noise_init: initial white (trace-to-trace) noise standard deviation
-            (unused for ``"iid"``).
-        seismic_mask_mode: per-angle reliability masking of the seismic likelihood,
-            ``"none"`` (default) or ``"critical_angle"``. ``"critical_angle"`` multiplies
-            every per-angle NLL element by a weight built from the analytic critical angle
-            of each interface (:mod:`src.forward.reliability`): unity below
-            ``theta_c - taper``, a cosine taper down to ``floor`` across the band and
-            ``floor`` (default 0) beyond ``theta_c``; the residual is then reduced as
-            ``sum(w * nll) / sum(w)`` so the reliable region keeps its full strength.
-            ``"none"`` bypasses the mechanism and reproduces the released numbers bit for
-            bit - the ``loss_dict`` key set is unchanged as well.
-        seismic_mask_layer_sigma: depth smoothing scale (in samples) applied to Vp before
-            the critical angle is evaluated; ``0`` (default) uses adjacent samples, which
-            is exactly what the forward difference stencil does.
-        seismic_mask_taper_deg: width (degrees) of the cosine taper below ``theta_c``.
-        seismic_mask_floor: weight kept beyond ``theta_c``, in ``[0, 1]`` (default 0).
+            * ``"marginal"`` (default) - Gaussian NLL of the moment-matched marginal
+              ``N(y; mu_marg, sigma_y^2 + Var_marg)``; the 2-D recipe.
+            * ``"expert"`` - analytic ``E_q[-log p(y|theta)]`` using ``tr(Sigma_k)``,
+              which needs the full-covariance posterior; the 1-D recipe.
+            * ``"mixture"`` - ``-logsumexp_k(log q_k - nll_k)`` with
+              ``sigma_y^2 + sigma_k^2`` per expert.
+            * ``"mixture_predictive"`` - ``-log sum_k pi_k N(y; mu_k, sigma_y^2 I +
+              Sigma_k)``; the only mode in which the off-diagonal structure enters.
+        noise_mode: ``"learned"`` (default) makes the observation variances learnable;
+            ``"fixed"`` keeps them at their initial values.
+        seismic_noise: ``"iid"`` (default), ``"coherent"`` (trace common mode with
+            ``C = sigma_c^2 11^T + sigma_w^2 I``) or ``"deviatoric"`` (the common mode is
+            marginalised, so only trace-to-trace differences are constrained). The
+            correlated models are 2-D only.
+        seismic_coh_noise_init: initial common-mode noise level (unused for ``"iid"``).
+        seismic_white_noise_init: initial white noise level (unused for ``"iid"``).
+        seismic_mask_mode: per-angle reliability masking, ``"none"`` (default) or
+            ``"critical_angle"``. The weight comes from
+            :func:`src.forward.reliability.critical_angle_weights` and the seismic term is
+            then reduced over the reliable region only; ``"none"`` is bit-wise the
+            released path.
+        seismic_mask_layer_sigma: depth smoothing scale of Vp, in samples (0 = adjacent
+            samples, matching the forward stencil).
+        seismic_mask_taper_deg: width of the cosine taper below the critical angle.
+        seismic_mask_floor: weight kept beyond the critical angle, in ``[0, 1]``.
     """
 
     def __init__(self,
@@ -136,8 +120,6 @@ class VBELBOCore(nn.Module):
                 "well_nll_mode must be marginal/mixture/expert/mixture_predictive, "
                 f"got {well_nll_mode!r}")
         self.well_nll_mode = str(well_nll_mode)
-        # gaussian only (the expert-level modes have no closed form with heavy tails)
-        self.likelihood = "gaussian"
 
         if seismic_noise not in ("iid", "coherent", "deviatoric"):
             raise ValueError(
@@ -146,8 +128,6 @@ class VBELBOCore(nn.Module):
         # set by the registered factory (``vbelbo_1d`` / ``vbelbo_2d``); a plain attribute,
         # so it never enters the state dict. ``None`` means "unknown" and is accepted.
         self.loss_dim: Optional[int] = None
-        self.seismic_coh_noise_init = float(seismic_coh_noise_init)
-        self.seismic_white_noise_init = float(seismic_white_noise_init)
         if self.seismic_noise != "iid":
             sc2 = float(seismic_coh_noise_init) ** 2
             sw2 = float(seismic_white_noise_init) ** 2
@@ -162,14 +142,8 @@ class VBELBOCore(nn.Module):
             self.log_seismic_white_var = nn.Parameter(torch.tensor(math.log(sw2)))
 
         # ---- per-angle reliability masking (opt-in; "none" = bit-wise legacy) ----
-        # Motivation (reviewer question): Aki-Richards is a *weak* physics constraint that
-        # is systematically wrong near/beyond the critical angle, so an iid likelihood fits
-        # that directed error as information and pushes the network off the true model.
-        # All four are plain attributes (no Parameter/buffer), so the state_dict key set is
-        # unchanged. Measured on Marmousi2 (2026-10-22 census): the most critical interface
-        # has theta_c = 32.8 deg and the fraction of interfaces with theta_c <= 30 deg is
-        # 0.00%, so a hard theta >= theta_c mask is a strict no-op on 5-30 deg data; only
-        # the taper band touches <= 0.04% of the pixels.
+        # Plain attributes, so the state_dict key set is unchanged; the convention lives in
+        # src/forward/reliability.py and the class docstring.
         if seismic_mask_mode not in ("none", "critical_angle"):
             raise ValueError(
                 "seismic_mask_mode must be none/critical_angle, "
@@ -216,13 +190,10 @@ class VBELBOCore(nn.Module):
         return nll.mean()
 
     def _reduce_pixel_nll(self, nll, mask, where="well_nll"):
-        """Reduce a **per-pixel** well NLL (the property axis already summed out).
+        """Reduce a per-pixel well NLL whose property axis is already summed out.
 
-        Unlike :meth:`_reduce_well_nll`, ``nll`` has shape ``(B, *spatial)`` because the
-        property axis is inside the NLL, so the mask must be reduced to the same rank
-        first. Multiplying a ``(B,1,L)`` mask with a ``(B,L)`` NLL would broadcast to
-        ``(B,B,L)`` and scale the loss by ``B`` (i.e. changing the batch size would change
-        the objective).
+        The mask must first be reduced to the same rank: multiplying a ``(B,1,L)`` mask by a
+        ``(B,L)`` NLL broadcasts to ``(B,B,L)`` and rescales the loss by the batch size.
         """
         if mask is None:
             return nll.mean()
@@ -265,13 +236,8 @@ class VBELBOCore(nn.Module):
             E_q[-log p(y|theta)] = 1/(2 sigma_y^2) sum_k pi_k (|y - mu_k|^2 + tr(Sigma_k))
                                    + D/2 log(2 pi sigma_y^2)
 
-        Why the expert-level quantities are required: ``sum_k pi_k |y - mu_k|^2`` is not
-        ``|y - mu_marg|^2``, and ``sum_k pi_k tr(Sigma_k)`` is not ``tr(Sigma_marg)`` --
-        using ``final_pred`` would lose how the variance is distributed across experts.
-
-        Differences from the marginal mode (both recorded in the theory contract): the
-        constant term is ``D/2 log(2 pi sigma_y^2)`` instead of a per-pixel
-        ``log(total_var)``, and there is no ``log(sigma_y^2 + Var_marg)`` term.
+        The expert-level quantities are required: ``final_pred`` would lose how the variance
+        is distributed across experts.
         """
         diff = (target.unsqueeze(1) - expert_mus).clamp(-self.clip_diff, self.clip_diff)
         quad = (diff ** 2).sum(dim=2)                       # (B,K,*spatial) |y - mu_k|^2
@@ -288,9 +254,8 @@ class VBELBOCore(nn.Module):
 
             -log sum_k pi_k N(y; mu_k, sigma_y^2 I + Sigma_k)
 
-        This is **not** the same quantity as ``"expert"``: the whole ``Sigma_k`` enters the
-        covariance, so the off-diagonal correlation is actually constrained, whereas the
-        expectation mode only uses ``tr(Sigma)``.
+        Unlike ``"expert"`` the whole ``Sigma_k`` enters, so the off-diagonals are
+        constrained rather than only ``tr(Sigma_k)``.
         """
         L = build_chol(expert_logvars, expert_off)                  # (B,K,3,3,*spatial)
         B, K = L.shape[:2]
@@ -336,13 +301,9 @@ class VBELBOCore(nn.Module):
     def _nll_seismic(self, syn, obs, mask_weight=None):
         """Seismic likelihood: NLL of p(d | theta_sample) under the configured noise model.
 
-        Args:
-            mask_weight: per-angle reliability weight (opt-in). ``None`` (the default)
-                returns ``nll.mean()`` unchanged and therefore stays bit-wise identical to
-                the released implementation. When given, the residual is reduced as
-                ``sum(w * nll) / sum(w)`` (``masked_mean``), i.e. averaged over the
-                reliable region only, so masking deletes information without weakening the
-                surviving constraints.
+        ``mask_weight=None`` (default) returns ``nll.mean()`` and stays bit-wise identical to
+        the released path; when given, the residual is reduced as ``sum(w * nll) / sum(w)``
+        over the reliable region only.
         """
         diff = (syn - obs).clamp(-self.clip_diff, self.clip_diff)
         if self.seismic_noise != "iid":
@@ -368,24 +329,17 @@ class VBELBOCore(nn.Module):
         return torch.exp(self.log_seismic_white_var)
 
     def _nll_seis_corr(self, diff: torch.Tensor) -> torch.Tensor:
-        """Gaussian NLL with a covariance that is correlated along the last (trace) axis.
+        """Gaussian NLL with a covariance correlated along the last (trace) axis.
 
-        With ``C = sigma_c^2 * 11^T + sigma_w^2 * I`` (an ``W x W`` matrix, ``1`` the
-        all-ones vector) the residual splits into a common mode and a deviatoric part,
-        ``r = c * 1 + w`` with ``w`` orthogonal to ``1``, and the two modes decouple::
+        With ``C = sigma_c^2 11^T + sigma_w^2 I`` the residual splits into a common mode and
+        a deviatoric part (``r = c 1 + w``, ``w`` orthogonal to ``1``), which decouple::
 
-            log|C|  = (W-1) * log sigma_w^2 + log(sigma_w^2 + W * sigma_c^2)
-            r^T C^-1 r = c^2 * W / (W * sigma_c^2 + sigma_w^2) + ||w||^2 / sigma_w^2
+            log|C|      = (W-1) log sigma_w^2 + log(sigma_w^2 + W sigma_c^2)
+            r^T C^-1 r  = c^2 W / (W sigma_c^2 + sigma_w^2) + ||w||^2 / sigma_w^2
 
-        The result is divided by ``W`` so it has the same scale as the element-wise iid
-        NLL (the seismic weight can therefore be carried over unchanged).
-
-        Both limits are correct: ``sigma_c^2 -> 0`` degenerates to iid (everything is
-        explained by ``sigma_w^2``), and ``sigma_c^2 -> inf`` makes the common-mode term
-        vanish, leaving only the trace-to-trace differences (``deviatoric``).
-
-        This writes "the common-mode mismatch counts once" into the likelihood instead of
-        treating the ``W`` traces as independent evidence.
+        Dividing by ``W`` keeps the scale of the element-wise iid NLL, so the seismic weight
+        carries over unchanged. ``sigma_c^2 -> 0`` degenerates to iid and
+        ``sigma_c^2 -> inf`` keeps only the trace-to-trace differences (``deviatoric``).
         """
         W = diff.shape[-1]
         if getattr(self, "loss_dim", None) == 1:

@@ -1,9 +1,9 @@
-"""地震子波生成（Ricker / Ormsby），torch 单一来源。
+"""Seismic wavelets (Ricker / Ormsby), single torch source.
 
-原 legacy 依赖 ``bruges.filters.wavelets``；本模块用 numpy+torch 重写相同数学，
-并按仓库统一口径保证核为关于 0 对称的**奇数长**（见 ``ricker_wavelet`` 注释）。
-两种子波都返回 ``(1, 1, L)`` 的 torch.float32 张量，可直接作 ``SeismicForward``
-的 ``wavelet`` 键值或 ``ElasticImpedanceForward.wavelet``。
+The legacy code used ``bruges.filters.wavelets``; this module re-implements the same
+mathematics in numpy + torch and guarantees the repository-wide convention of an odd-length
+kernel symmetric about 0 (see ``ricker_wavelet``). Both wavelets return a ``(1, 1, L)``
+torch.float32 tensor, ready to be used as the ``wavelet`` entry of ``SeismicForward``.
 """
 
 from __future__ import annotations

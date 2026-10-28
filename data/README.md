@@ -14,11 +14,7 @@ data/
 ├── raw/
 │   ├── observations/
 │   │   ├── elastic_impedance_results.mat   # (1200, 1360, 7) float64, 7-angle stack incl. 0 deg
-│   │   ├── data2.npy                        # dict: tmp_synth (1360,5,1200), parameter (1360,3,1200)
-│   │   ├── data2_snr2.npy                   # optional, CSI-STMC noise arm
-│   │   ├── data2_snr5.npy
-│   │   ├── data2_snr10.npy
-│   │   └── data2_snr15.npy
+│   │   ├── data2.npy                        # dict: parameter (1360,3,1200)
 │   └── priors/
 │       ├── gmm_priors.npz                    # {"means": (K,3), "variances"|"covariances": ...}
 │       └── spatial_prior.pt                  # (H, W, K) or (K, H, W) torch tensor
@@ -46,7 +42,6 @@ Each run writes, atomically:
 | `data/processed/<name>/target_low_s*.npy` | `(3, 1200, 1360)` | Gaussian low-frequency model (sigma = 30 for 1D, 100 for 2D) |
 | `data/processed/<name>/spatial_prior.npy` | `(K, 1200, 1360)` | spatial prior probability, channel-first |
 | `data/processed/<name>/gmm_prior.npz` | keys `means` `(K,3)`, `covariances` `(K,3,3)`, `weights` `(K,)` | GMM prior in the normalized space (full covariance) |
-| `data/processed/<name>/seismic5_csistmc.npy` | `(1360, 5, 1200)` | 5-angle gathers (only needed by the CSI-STMC baseline, not the main method) |
 | `data/processed/<name>/MANIFEST.json` | — | per-file shape / dtype / md5 provenance record |
 | `data/interim/norm_stats.json` | — | per-channel z-score statistics for the 12 train traces |
 

@@ -10,11 +10,6 @@
                                   （GMM.ipynb cell 13 口径：reg_covar=1e-6 + shrinkage
                                   0.1 + eps*eye，不裁剪；raw gmm_priors.npz 仅留作溯源）
 
-    # 可选：include_baseline_data: true（默认 false）时额外生成
-    #     seismic5_csistmc (1360, 5, 1200) <- data2.npy['tmp_synth']
-    # 那是已归档基线（CSI-STMC / MTL）的输入，不属于 Geo-VB-MILE 主链路，
-    # 公开版默认不生成（原仓库默认生成）。
-
 归一化统计严格按 notebook 口径：train 子集 = linspace(20, 1300, 12)，
 mean/std 在该子集沿 (depth, trace) 计算并 +1e-8。
 
@@ -80,7 +75,6 @@ def rebuild(config_path: str | Path = "configs/data/seismic1d.yaml", *,
     low_sigma = float(pre.get("low_sigma", 30))
     num_train = int(pre.get("num_train", 12))
     num_val = int(pre.get("num_val", 7))
-    include_baseline = bool(pre.get("include_baseline_data", False))
     train_start, train_end = int(pre.get("train_start", 20)), int(pre.get("train_end", 1300))
     val_start, val_end = int(pre.get("val_start", 30)), int(pre.get("val_end", 1300))
 
@@ -119,9 +113,6 @@ def rebuild(config_path: str | Path = "configs/data/seismic1d.yaml", *,
         files.get("seismic", "seismic6.npy"): seismic_phys.astype(dtype),
         files.get("target", "target.npy"): target_phys.astype(dtype),
     }
-    # 5 角道集（已归档基线 CSI-STMC/MTL 的输入）；默认不产出，见 include_baseline_data
-    if include_baseline and files.get("seismic5_csistmc"):
-        arrays[files["seismic5_csistmc"]] = np.asarray(data2["tmp_synth"]).astype(dtype)
 
     # 低频模型
     arrays[files.get("target_low")] = gaussian_filter(

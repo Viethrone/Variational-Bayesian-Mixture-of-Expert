@@ -7,9 +7,6 @@
 
 子目录：
     main        主实验
-    baselines   对比实验
-    ablations   消融实验
-    sweeps      超参搜索
 """
 
 from experiments.common import (

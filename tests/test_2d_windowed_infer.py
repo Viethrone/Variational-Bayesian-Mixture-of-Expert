@@ -177,7 +177,7 @@ def test_window_width_floor(run_2d):
 
 
 def test_aniso_encoder_allows_narrow_windows(run_2d):
-    """``encoder_downsample=aniso`` is what makes the CSI-STMC geometry (width 5) usable."""
+    """``encoder_downsample=aniso`` keeps narrow trace widths (5) runnable."""
     from src.models.base import MODELS
     import src.models  # noqa: F401
 

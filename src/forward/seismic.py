@@ -21,27 +21,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.forward.base import FORWARD_OPERATORS
-from src.forward.wavelets import ricker_wavelet  # noqa: F401  (单一来源)
+from src.forward.wavelets import ricker_wavelet  # noqa: F401  (single source)
 
 __all__ = ["FORWARD_OPERATORS", "metadata", "ricker_wavelet", "SeismicForward"]
 
 
 def metadata() -> dict:
-    """注册在 models.json 里的可复现信息。"""
+    """Reproducibility metadata written into models.json."""
     return {
-        "forward": "SeismicForward(Aki-Richards) + Ricker 卷积",
+        "forward": "SeismicForward(Aki-Richards) + Ricker convolution",
         "angles_deg_default": [5, 10, 15, 20, 25, 30],
     }
 
 
 @FORWARD_OPERATORS.register("synthetic_seismic")
 class SeismicForward(nn.Module):
-    """基于 Aki-Richards 近似的角度域正演（1D/2D 统一实现）。
+    """Angle-domain forward modelling with the Aki-Richards approximation (1-D and 2-D).
 
     Args:
-        wavelet: (1,1,L_w) 的 Ricker 子波，或传入 (dt, f, length_sec) 字典自动生成。
-        angles_deg: 角度列表（度）。
-        dim: 1（逐道 (B,3,L)）或 2（切片 (B,3,H,W)）；默认按输入张量 3/4 维自动判定。
+        wavelet: a (1,1,L_w) Ricker kernel, or a (dt, f, length_sec) dict to build one.
+        angles_deg: incidence angles in degrees.
+        dim: 1 for per-trace (B,3,L) or 2 for slices (B,3,H,W); inferred from the input rank.
     """
 
     def __init__(
@@ -77,7 +77,7 @@ class SeismicForward(nn.Module):
     def aki_richards_reflectivity(
         self, vp1, vs1, rho1, vp2, vs2, rho2, theta_rad: torch.Tensor
     ) -> torch.Tensor:
-        """Aki-Richards 近似反射系数；theta_rad 形状含末维角度。"""
+        """Aki-Richards reflectivity; ``theta_rad`` carries the angle on its last axis."""
         vp_avg = (vp1 + vp2) / 2.0
         vs_avg = (vs1 + vs2) / 2.0
         rho_avg = (rho1 + rho2) / 2.0
@@ -105,7 +105,7 @@ class SeismicForward(nn.Module):
         return term1 + term2 + term3
 
     def forward(self, mu_phys: torch.Tensor) -> torch.Tensor:
-        """物理空间弹性参数 (B,3,*) -> 合成角道集 (B,n_angles,*)。"""
+        """Physical elastic parameters (B,3,*) -> synthetic angle gathers (B,n_angles,*)."""
         B, C = mu_phys.shape[:2]
         vp, vs, rho = mu_phys[:, 0], mu_phys[:, 1], mu_phys[:, 2]
 

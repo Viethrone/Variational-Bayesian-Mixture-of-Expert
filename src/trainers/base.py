@@ -1,4 +1,4 @@
-"""训练器基类与配置。"""
+"""Trainer base class and configuration."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ TRAINERS = Registry("trainer")
 
 @dataclass
 class TrainerConfig:
-    """训练流程参数，由 `cfg["trainer"]` 构造。"""
+    """Training-loop settings, built from ``cfg["trainer"]``."""
 
     max_epochs: int = 50
     val_every: int = 1
@@ -31,7 +31,7 @@ class TrainerConfig:
 
     @classmethod
     def from_dict(cls, cfg: Optional[Dict[str, Any]]) -> "TrainerConfig":
-        """从配置字典构造，未知键进入 `extra` 而非报错，便于逐步扩展。"""
+        """Build from a config dict; unknown keys land in `extra` instead of raising."""
         cfg = dict(cfg or {})
         known = {f for f in cls.__dataclass_fields__ if f != "extra"}
         kwargs = {k: v for k, v in cfg.items() if k in known}
@@ -40,9 +40,9 @@ class TrainerConfig:
 
 
 class BaseTrainer(ABC):
-    """训练器基类。
+    """Trainer base class.
 
-    子类实现 `run`；基类提供指标落盘、最优记录等通用助手。
+    Subclasses implement `run`; shared helpers for metrics and best-epoch tracking live here.
     """
 
     def __init__(self, run_info: RunInfo, cfg: Optional[TrainerConfig] = None) -> None:
@@ -53,11 +53,11 @@ class BaseTrainer(ABC):
 
     @abstractmethod
     def run(self) -> Dict[str, Any]:
-        """执行完整训练/反演流程，返回指标字典。"""
+        """Run the full training / inversion loop and return the metrics dict."""
 
-    # ---- 通用助手 ----
+    # ---- shared helpers ----
     def record_best(self, metric_name: str, value: float, epoch: int, *, higher_is_better: bool = False) -> bool:
-        """记录并判断是否为当前最优；返回 True 表示刷新最优。"""
+        """Record a value and report whether it is a new best."""
         current = self._best.get("value")
         improved = (
             current is None
@@ -65,16 +65,16 @@ class BaseTrainer(ABC):
         )
         if improved:
             self._best = {"metric": metric_name, "value": float(value), "epoch": int(epoch)}
-            self.logger.info("刷新最优 %s=%.6f @ epoch %d", metric_name, value, epoch)
+            self.logger.info("new best %s=%.6f @ epoch %d", metric_name, value, epoch)
         return improved
 
     def finalize(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
-        """统一收尾：写 metrics.json 并返回完整指标字典。"""
+        """Finalise: write metrics.json and return the complete metrics dict."""
         payload = dict(metrics)
         if self._best.get("value") is not None:
             payload["best"] = dict(self._best)
         self.run_info.write_metrics(payload)
-        self.logger.info("指标已写入 %s", self.run_info.path("metrics.json"))
+        self.logger.info("metrics written to %s", self.run_info.path("metrics.json"))
         return payload
 
 
@@ -83,9 +83,9 @@ def build_trainer(
     run_info: RunInfo,
     registry: Optional[Registry] = None,
 ) -> BaseTrainer:
-    """构造训练器。
+    """Build a trainer.
 
-    配置形如::
+    The config looks like::
 
         trainer:
           _target_: vbmile

@@ -1,4 +1,4 @@
-"""通用工具：配置加载、组件注册、随机种子、日志、run 元信息、IO。"""
+"""Shared utilities: config, registry, seeding, logging, run metadata, IO."""
 
 from src.utils.config import (
     deep_merge,

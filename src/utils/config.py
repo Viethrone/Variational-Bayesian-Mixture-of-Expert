@@ -1,13 +1,13 @@
-"""配置加载：支持 `_base_` 继承、深合并、命令行覆盖、副本落盘。
+"""Config loading: `_base_` inheritance, deep merge, CLI overrides, saved copy.
 
-用法::
+Usage::
 
     cfg = load_config("configs/inversion/default.yaml", overrides=["seed=1", "inversion.solver.lr=0.01"])
 
-约定：
-    * `_base_` 可以是字符串或字符串列表；相对路径以**当前 yaml 所在目录**为基准。
-    * 合并顺序：base(从左到右) -> 当前文件 -> overrides。
-    * overrides 语法为 `a.b.c=value`，value 会被解析为 yaml 标量（数字/布尔/null/字符串）。
+Conventions:
+    * `_base_` is a string or a list of strings; relative paths resolve against the yaml directory.
+    * merge order: base (left to right) -> current file -> overrides.
+    * overrides use `a.b.c=value`; the value is parsed as a YAML scalar.
 """
 
 from __future__ import annotations
@@ -33,28 +33,28 @@ ConfigDict = Dict[str, Any]
 
 
 def load_yaml(path: Union[str, Path]) -> ConfigDict:
-    """读取单个 yaml 文件为 dict；空文件返回 {}。"""
+    """Read a single yaml file into a dict; an empty file yields {}."""
     p = Path(path)
     if not p.exists():
-        raise FileNotFoundError(f"配置文件不存在: {p}")
+        raise FileNotFoundError(f"config file not found: {p}")
     with p.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ValueError(f"配置文件顶层必须是映射(dict)，实际为 {type(data).__name__}: {p}")
+        raise ValueError(f"the top level of a config must be a mapping, got {type(data).__name__}: {p}")
     return data
 
 
 def _resolve_bases(raw: Mapping[str, Any], current_dir: Path) -> List[Path]:
-    """把 `_base_` 解析为按优先级从低到高排列的路径列表。"""
+    """Resolve `_base_` into a path list ordered from lowest to highest priority."""
     bases = raw.get(BASE_KEY)
     if bases is None:
         return []
     if isinstance(bases, (str, Path)):
         bases = [bases]
     if not isinstance(bases, Sequence):
-        raise ValueError(f"`{BASE_KEY}` 必须是字符串或字符串列表，实际为 {type(bases).__name__}")
+        raise ValueError(f"`{BASE_KEY}` must be a string or a list of strings, got {type(bases).__name__}")
     resolved = []
     for b in bases:
         p = Path(b)
@@ -63,7 +63,7 @@ def _resolve_bases(raw: Mapping[str, Any], current_dir: Path) -> List[Path]:
 
 
 def deep_merge(base: ConfigDict, override: Mapping[str, Any]) -> ConfigDict:
-    """递归合并两个 dict，返回新对象；override 优先，dict 逐层合并，其他类型直接覆盖。"""
+    """Recursively merge two dicts into a new one: dicts merge, anything else is replaced."""
     result = copy.deepcopy(base)
     for key, value in override.items():
         if key == BASE_KEY:
@@ -81,12 +81,12 @@ def load_config(
     *,
     keep_base_key: bool = False,
 ) -> ConfigDict:
-    """加载配置并应用继承与覆盖。
+    """Load a config, applying inheritance and overrides.
 
     Args:
-        path: 入口 yaml 路径。
-        overrides: 形如 ``["a.b=1", "c=d"]`` 的覆盖项。
-        keep_base_key: 为 True 时保留 `_base_` 字段（调试用）。
+        path: entry yaml path.
+        overrides: entries of the form ``["a.b=1", "c=d"]``.
+        keep_base_key: keep the `_base_` field (debugging).
     """
     entry = Path(path)
     cfg = _load_recursive(entry, _seen=set())
@@ -98,11 +98,11 @@ def load_config(
 
 
 def _load_recursive(path: Path, _seen: set) -> ConfigDict:
-    """递归展开 `_base_`，并检测循环继承。"""
+    """Expand `_base_` recursively and detect cyclic inheritance."""
     resolved = path.resolve()
     if resolved in _seen:
         chain = " -> ".join(str(p) for p in _seen)
-        raise ValueError(f"检测到配置循环继承: {chain} -> {resolved}")
+        raise ValueError(f"cyclic config inheritance: {chain} -> {resolved}")
     _seen = _seen | {resolved}
 
     raw = load_yaml(resolved)
@@ -113,17 +113,17 @@ def _load_recursive(path: Path, _seen: set) -> ConfigDict:
 
 
 def parse_override(item: str) -> tuple[str, Any]:
-    """把 ``a.b.c=value`` 解析为 (键路径, 已转型的值)。"""
+    """Parse ``a.b.c=value`` into (key path, typed value)."""
     if "=" not in item:
-        raise ValueError(f"覆盖项必须是 key=value 形式，收到: {item!r}")
+        raise ValueError(f"an override must look like key=value, got: {item!r}")
     key, raw_value = item.split("=", 1)
     key = key.strip()
     if not key:
-        raise ValueError(f"覆盖项的键为空: {item!r}")
+        raise ValueError(f"the override key is empty: {item!r}")
     try:
         value = yaml.safe_load(raw_value)
     except yaml.YAMLError:
-        value = raw_value  # 无法解析时按原始字符串处理
+        value = raw_value  # unparsable values stay as the raw string
     return key, value
 
 
@@ -140,7 +140,7 @@ def _set_nested(cfg: ConfigDict, dotted_key: str, value: Any) -> None:
 
 
 def override_from_cli(cfg: ConfigDict, overrides: Iterable[str]) -> ConfigDict:
-    """按点分路径应用命令行覆盖，返回新 dict。"""
+    """Apply dot-path overrides and return a new dict."""
     result = copy.deepcopy(cfg)
     for item in overrides:
         key, value = parse_override(item)
@@ -149,7 +149,7 @@ def override_from_cli(cfg: ConfigDict, overrides: Iterable[str]) -> ConfigDict:
 
 
 def save_config(cfg: Mapping[str, Any], path: Union[str, Path]) -> Path:
-    """把最终配置写盘（run 目录中的 config.yaml 副本）。"""
+    """Write the resolved config (the config.yaml copy kept in a run directory)."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("w", encoding="utf-8") as f:

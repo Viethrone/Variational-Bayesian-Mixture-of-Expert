@@ -1,8 +1,5 @@
-"""P3 VB-MoE 门：1D/2D 前反向有限、KL 有限、温度退火、两阶段行为。
-
-门原句："B=2/L=64(1D)、B=2/64×24(2D) 前反向有限、KL 有限、
-set_temperature/set_phase 行为；tests/test_legacy_checkpoint.py 断言 ……"。
-"""
+"""VB-MoE gate: finite forward/backward in 1-D and 2-D, bounded KL, temperature annealing,
+and the two-phase behaviour."""
 
 from __future__ import annotations
 
@@ -26,12 +23,12 @@ def _prior_probs(shape):
 
 
 # ---------------------------------------------------------------------------
-# T2 z_temperature：温度退火作用于门控软权重（默认关，逐位 legacy）
+# z_temperature: annealing acts on the gate probabilities (off by default = bit-wise legacy)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("dim,shape", [(1, (2, 6, 32)), (2, (2, 6, 32, 24))])
 def test_z_temperature_off_is_plain_softmax(dim, shape):
-    """默认关：z_soft 就是 softmax(logits)，且 z_temperature 不进 state-dict。"""
+    """Off by default: z_soft is softmax(logits) and the switch never enters the state dict."""
     torch.manual_seed(0)
     model = GeoVBMILE(dim=dim, base_channels=8, num_experts=3, z_temperature=False)
     assert model.z_temperature is False
@@ -42,7 +39,7 @@ def test_z_temperature_off_is_plain_softmax(dim, shape):
 
 
 def test_z_temperature_tau_one_is_bitwise_identity():
-    """τ=1 时 tempered 门控与原生路径逐位相同（镜像实现，两模型同权）。"""
+    """tau=1 reproduces the native path bit for bit (the mirror uses the same weights)."""
     s, low = torch.randn(2, 6, 32), torch.randn(2, 3, 32)
     torch.manual_seed(0)
     m_off = GeoVBMILE(dim=1, base_channels=8, num_experts=3, z_temperature=False)
@@ -58,7 +55,7 @@ def test_z_temperature_tau_one_is_bitwise_identity():
 
 
 def test_z_temperature_sharpens_gate_and_keeps_kl_bounded():
-    """退火终点：门控变锐、argmax 不变、kl_z 仍有界、前后向有限。"""
+    """At the end of annealing: sharper gate, same argmax, bounded kl_z, finite gradients."""
     torch.manual_seed(0)
     model = GeoVBMILE(dim=1, base_channels=8, num_experts=3,
                       initial_temperature=1.0, final_temperature=0.1,
@@ -80,7 +77,7 @@ def test_z_temperature_sharpens_gate_and_keeps_kl_bounded():
 
 
 # ---------------------------------------------------------------------------
-# 前向 / 反向有限
+# finite forward / backward
 # ---------------------------------------------------------------------------
 
 def test_1d_forward_backward_finite():
@@ -120,7 +117,7 @@ def test_2d_forward_backward_finite():
 
 
 # ---------------------------------------------------------------------------
-# KL 有限且有界
+# KL is finite and bounded
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("dim,shape", [(1, (2, 6, 64)), (2, (2, 6, 24, 32))])
@@ -133,27 +130,27 @@ def test_kl_z_bounded(dim, shape):
     assert torch.isfinite(out["kl_z"])
     # KL(q||uniform_K) ∈ [0, ln K]
     assert 0.0 <= kl <= math.log(3) + 1e-4, kl
-    # 2D 额外返回逐专家 KL 分量
+    # 2-D also returns the per-expert KL terms
     if dim == 2:
         assert tuple(out["kl_theta_per_expert"].shape) == (2, 3, *shape[2:])
         assert torch.isfinite(out["kl_theta_per_expert"]).all()
 
 
 # ---------------------------------------------------------------------------
-# set_temperature / set_phase 行为
+# set_temperature / set_phase behaviour
 # ---------------------------------------------------------------------------
 
 def test_set_temperature_anneals():
     model = GeoVBMILE(dim=1, initial_temperature=1.0, final_temperature=0.05)
     model.set_temperature(0, 100)
     t0 = float(model.current_temperature)
-    model.set_temperature(99, 100)   # 训练循环最多调用 epoch-1（见 train_model_1d）
+    model.set_temperature(99, 100)   # the loop calls it with epoch-1 at most
     t1 = float(model.current_temperature)
     model.set_temperature(50, 100)
     t2 = float(model.current_temperature)
     assert t0 == pytest.approx(1.0, abs=1e-5)   # epoch 0: cos=1 -> initial
-    assert t2 == pytest.approx(0.525, abs=1e-4)  # epoch 50: cos=0 -> 中点
-    assert 0.05 < t1 < t2 < t0                   # 单调余弦退火，末值逼近 final
+    assert t2 == pytest.approx(0.525, abs=1e-4)  # epoch 50: cos=0 -> midpoint
+    assert 0.05 < t1 < t2 < t0                   # monotone cosine decay toward the floor
 
 
 def test_set_phase_1_and_2_requires_grad():
@@ -162,12 +159,12 @@ def test_set_phase_1_and_2_requires_grad():
     assert all(p.requires_grad for p in model.parameters())
 
     model.set_phase(2)
-    # 门控冻结，编码器 + 专家保留梯度
+    # the gate is frozen; encoder and experts keep their gradients
     assert all(not p.requires_grad for p in model.partition_layer.parameters())
     assert all(p.requires_grad for p in model.encoder.parameters())
     assert all(p.requires_grad for p in model.experts.parameters())
 
-    # phase 3（N4，M3-D 联合微调）：全参数可训；越界阶段才报错
+    # phase 3 (joint fine-tune): every parameter trains; only out-of-range phases raise
     model.set_phase(3)
     assert all(p.requires_grad for p in model.partition_layer.parameters())
     assert all(p.requires_grad for p in model.parameters())
@@ -178,11 +175,11 @@ def test_set_phase_1_and_2_requires_grad():
 
 
 # ---------------------------------------------------------------------------
-# A1 decoder_share：1D 专家解码器去共享
+# decoder_share: de-sharing the 1-D expert decoder
 # ---------------------------------------------------------------------------
 
 def test_decoder_share_shared_keeps_legacy_keys_and_values():
-    """默认 shared：与显式 shared 键集/数值逐位相同，且 share 不进 state-dict。"""
+    """Default shared: same keys and values as an explicit shared, no state-dict entry."""
     s, low = torch.randn(2, 6, 32), torch.randn(2, 3, 32)
     torch.manual_seed(0)
     implicit = GeoVBMILE(dim=1, base_channels=8, num_experts=3).eval()
@@ -199,13 +196,13 @@ def test_decoder_share_shared_keeps_legacy_keys_and_values():
 
 
 def test_decoder_share_independent_preserves_rng_order():
-    """independent 只在末尾补画：共享子模块参数与 shared 版逐位相同。"""
+    """independent only appends modules: shared sub-modules keep their released values."""
     torch.manual_seed(0)
     shared = GeoVBMILE(dim=1, base_channels=8, num_experts=3, decoder_share="shared")
     torch.manual_seed(0)
     indep = GeoVBMILE(dim=1, base_channels=8, num_experts=3, decoder_share="independent")
     sd_s, sd_i = shared.state_dict(), indep.state_dict()
-    assert set(sd_s) <= set(sd_i)                       # 纯增量
+    assert set(sd_s) <= set(sd_i)                       # purely additive
     assert all(torch.equal(sd_s[k], sd_i[k]) for k in sd_s)
     assert any(k.startswith("experts.conv1s.") for k in sd_i)
 
@@ -218,7 +215,7 @@ def test_decoder_share_invalid_and_dim2():
 
 
 def test_decoder_share_independent_forward_backward():
-    """independent：参数量增加、前后向有限、逐专家模块梯度互异。"""
+    """independent: more parameters, finite gradients, distinct per-expert gradients."""
     torch.manual_seed(0)
     model = GeoVBMILE(dim=1, base_channels=8, num_experts=3,
                       decoder_share="independent").train()
@@ -243,7 +240,7 @@ def test_decoder_share_independent_forward_backward():
 
 
 # ---------------------------------------------------------------------------
-# 注册表接线
+# registry wiring
 # ---------------------------------------------------------------------------
 
 def test_registry_registrations():
@@ -255,7 +252,7 @@ def test_registry_registrations():
     m2 = MODELS.get("vbmile_2d")(base_channels=8, num_experts=2)
     assert isinstance(m2, GeoVBMILE) and m2.dim == 2
 
-    # vbelbo_1d 默认权重为 1D 脚本口径（0.05/0.01），vbelbo_2d 为 1.0/1.0
+    # vbelbo_1d defaults to the 1-D script weights (0.05/0.01), vbelbo_2d to 1.0/1.0
     c1 = LOSSES.get("vbelbo_1d")()
     c2 = LOSSES.get("vbelbo_2d")()
     assert c1.kl_z_weight == pytest.approx(0.05) and c1.kl_theta_weight == pytest.approx(0.01)
@@ -263,7 +260,7 @@ def test_registry_registrations():
 
 
 def test_no_prior_buffers_default():
-    """未提供先验时注册缓冲为 (K,3) 单位先验，前向仍有限。"""
+    """Without a prior the buffers hold a (K,3) unit prior and the forward stays finite."""
     model = GeoVBMILE(dim=1, num_experts=2, base_channels=8)
     assert tuple(model.prior_means.shape) == (2, 3)
     out = model(torch.randn(1, 6, 32), num_samples=1)
@@ -272,11 +269,11 @@ def test_no_prior_buffers_default():
 
 
 # ---------------------------------------------------------------------------
-# T3 井项口径：marginal（默认，逐位 legacy）/ mixture（严格混合 ELBO）
+# well term: marginal (default, bit-wise legacy) / mixture (exact mixture ELBO)
 # ---------------------------------------------------------------------------
 
 def _mixture_out(mus, logvars, z_soft):
-    """构造最小 model_output：final_pred 用矩匹配边际（marginal 口径的输入）。"""
+    """Build a minimal model_output whose final_pred is the moment-matched marginal."""
     mu = (z_soft.unsqueeze(2) * mus).sum(dim=1)
     second = (z_soft.unsqueeze(2) * (torch.exp(logvars) + mus**2)).sum(dim=1)
     logvar = torch.log((second - mu**2).clamp_min(1e-12))
@@ -291,7 +288,7 @@ def _mixture_out(mus, logvars, z_soft):
 
 
 def test_well_nll_mode_default_is_marginal_bitwise():
-    """默认构造与显式 marginal 逐位一致；非法取值报错。"""
+    """The default equals an explicit marginal; invalid values raise."""
     assert VBELBOCore().well_nll_mode == "marginal"
     c = VBELBOCore()
     out = _mixture_out(torch.randn(2, 3, 3, 16), torch.full((2, 3, 3, 16), -4.0),
@@ -302,12 +299,12 @@ def test_well_nll_mode_default_is_marginal_bitwise():
     assert torch.equal(v_default, v_explicit)
     with pytest.raises(ValueError):
         VBELBOCore(well_nll_mode="nope")
-    # 工厂路径也透传该开关
+    # the factory path forwards the switch too
     assert LOSSES.get("vbelbo_1d")(well_nll_mode="mixture").well_nll_mode == "mixture"
 
 
 def test_well_nll_mixture_equals_marginal_when_experts_identical():
-    """专家完全相同时，混合 ELBO 与矩匹配边际数值相等（Σ_k z_k = 1）。"""
+    """With identical experts the mixture ELBO equals the moment-matched marginal."""
     base = torch.randn(1, 1, 3, 12)
     mus = base.expand(1, 3, 3, 12).contiguous()
     logvars = torch.full((1, 3, 3, 12), -3.0)
@@ -322,7 +319,7 @@ def test_well_nll_mixture_equals_marginal_when_experts_identical():
 
 
 def test_well_nll_mixture_differentiates_experts():
-    """专家分布差异时，mixture 给每个专家自己的残差梯度；marginal 全部收到同一残差。"""
+    """With distinct experts, mixture routes per-expert residuals; marginal routes one."""
     d = 2.0
     mus = torch.zeros(1, 2, 3, 4, requires_grad=True)
     with torch.no_grad():
@@ -335,7 +332,7 @@ def test_well_nll_mixture_differentiates_experts():
     def _grads(mode):
         m = mus.detach().clone().requires_grad_(True)
         out = _mixture_out(m, logvars, z_soft)
-        # 边际方差固定为常数，隔离出"残差"这一条通道（否则 logvar 也带梯度）
+        # the marginal variance is constant, isolating the residual channel
         out["final_pred"] = torch.cat(
             [out["final_pred"][:, :3], torch.full_like(out["final_pred"][:, 3:], math.log(0.01))],
             dim=1)
@@ -344,14 +341,14 @@ def test_well_nll_mixture_differentiates_experts():
 
     g0m, g1m = _grads("marginal")
     g0x, g1x = _grads("mixture")
-    # marginal：μ_marg 残差为零 → 两个专家梯度都被抹平
+    # marginal: the mu_marg residual is zero, so both expert gradients vanish
     assert abs(g0m) < 1e-6 and abs(g1m) < 1e-6
-    # mixture：各自残差符号相反 → 责任度分化
+    # mixture: the residuals have opposite signs, so responsibility separates
     assert g0x > 0 and g1x < 0 and g0x * g1x < 0
 
 
 def test_well_nll_mixture_full_model_forward_backward():
-    """mixture 口径在真实模型输出上前后向有限，loss_dict 键集不变。"""
+    """mixture runs finite on real model output and keeps the loss_dict key set."""
     torch.manual_seed(0)
     model = GeoVBMILE(dim=1, base_channels=16, num_experts=3).train()
     out = model(torch.randn(2, 6, 64), low_freq_model=torch.randn(2, 3, 64),
@@ -366,13 +363,13 @@ def test_well_nll_mixture_full_model_forward_backward():
                if p.grad is not None for g in [p.grad])
 
 # ---------------------------------------------------------------------------
-# prior_cov_shrinkage：全协方差先验的条件数收缩（默认关，逐位 legacy）
+# prior_cov_shrinkage: condition-number shrinkage (off by default = bit-wise legacy)
 # ---------------------------------------------------------------------------
 
 def _ill_conditioned_prior(K=3, d=3, seed=0):
-    """构造一个**近乎奇异**的全协方差先验：谱固定为 [1e-5, 1.2, 1.5]（cond ~1.5e5）。
+    """Build a near-singular full-covariance prior with spectrum [1e-5, 1.2, 1.5].
 
-    与实测 GMM 先验同病（归一化空间三通道近乎共线 → λ_min 3e-4 / cond 5804）。
+    It fails the same way as the measured GMM prior (near-collinear channels).
     """
     g = torch.Generator().manual_seed(seed)
     q, _ = torch.linalg.qr(torch.randn(d, d, generator=g))
@@ -382,7 +379,7 @@ def _ill_conditioned_prior(K=3, d=3, seed=0):
 
 
 def test_prior_cov_shrinkage_default_off_is_bitwise_identity():
-    """默认 0.0：prior_vars 逐位不变，且开关不进 state-dict（legacy 键集不破）。"""
+    """Default 0.0: prior_vars unchanged and the switch never enters the state dict."""
     means, cov = _ill_conditioned_prior()
     torch.manual_seed(0)
     off = GeoVBMILE(dim=1, base_channels=8, num_experts=3,
@@ -395,30 +392,30 @@ def test_prior_cov_shrinkage_default_off_is_bitwise_identity():
     tuned = GeoVBMILE(dim=1, base_channels=8, num_experts=3,
                       prior_means=means, prior_vars=cov, prior_cov_shrinkage=0.1)
     assert tuned.prior_cov_shrinkage == 0.1
-    assert not torch.equal(tuned.prior_vars, cov)          # 只有开启才动
-    assert torch.equal(tuned.prior_means, off.prior_means)  # 均值不受影响
+    assert not torch.equal(tuned.prior_vars, cov)          # only moves when enabled
+    assert torch.equal(tuned.prior_means, off.prior_means)  # means are untouched
 
 
 def test_prior_cov_shrinkage_raises_min_eigenvalue():
-    """正向：收缩把 λ_min 抬起来、cond 压下去，且仍是对称正定。"""
+    """Shrinkage raises the smallest eigenvalue, lowers the condition number, stays SPD."""
     means, cov = _ill_conditioned_prior()
-    cond_before = float(torch.linalg.cond(cov).max())       # cond 是 (K,) 向量
-    assert cond_before > 1e3                                # 前提：先验确实病态
+    cond_before = float(torch.linalg.cond(cov).max())       # cond is a (K,) vector
+    assert cond_before > 1e3                                # precondition: ill conditioned
 
     model = GeoVBMILE(dim=1, base_channels=8, num_experts=3,
                       prior_means=means, prior_vars=cov, prior_cov_shrinkage=0.1)
     pv = model.prior_vars
     assert pv.ndim == 3 and pv.shape == cov.shape
-    assert torch.allclose(pv, pv.transpose(-1, -2))         # 对称
-    assert torch.linalg.eigvalsh(pv).min() > 0              # 正定
+    assert torch.allclose(pv, pv.transpose(-1, -2))         # symmetric
+    assert torch.linalg.eigvalsh(pv).min() > 0              # positive definite
     lam_before = torch.linalg.eigvalsh(cov).min()
     lam_after = torch.linalg.eigvalsh(pv).min()
-    assert float(lam_after) > 10 * float(lam_before)         # λ_min 显著抬高
-    assert float(torch.linalg.cond(pv).max()) < cond_before / 10   # cond 显著下降
+    assert float(lam_after) > 10 * float(lam_before)         # smallest eigenvalue raised
+    assert float(torch.linalg.cond(pv).max()) < cond_before / 10   # condition improved
 
 
 def test_prior_cov_shrinkage_reduces_kl_and_forward_ok():
-    """收缩后 KL(θ) 下降一个数量级以上，且前反向仍有限（口径不破）。"""
+    """shrinkage cuts KL(theta) by an order of magnitude with finite gradients."""
     means, cov = _ill_conditioned_prior()
     s, low = torch.randn(2, 6, 32), torch.randn(2, 3, 32)
 
@@ -433,8 +430,8 @@ def test_prior_cov_shrinkage_reduces_kl_and_forward_ok():
     small = _kl(GeoVBMILE(dim=1, base_channels=8, num_experts=3,
                           prior_means=means, prior_vars=cov, prior_cov_shrinkage=0.1))
     assert torch.isfinite(big) and torch.isfinite(small)
-    # 收缩直接把 tr(Σp⁻¹V) 项压掉（λ_min 抬约两个数量级）→ KL 至少降数倍；
-    # 不写"降 10×"是因为 KL 里 −Σlogvar / ln|Σp| 不随收缩等比变化。
+    # shrinkage cuts the tr(Sp^-1 V) term (smallest eigenvalue up ~100x);
+    # the log-determinant part does not scale with the shrinkage factor.
     assert float(small) < float(big) / 5
 
     model = GeoVBMILE(dim=1, base_channels=8, num_experts=3,
@@ -450,7 +447,7 @@ def test_prior_cov_shrinkage_reduces_kl_and_forward_ok():
 
 
 def test_prior_cov_shrinkage_rejects_out_of_range():
-    """收缩率必须落在 [0, 1)。"""
+    """The shrinkage rate must be inside [0, 1)."""
     with pytest.raises(ValueError, match="prior_cov_shrinkage"):
         GeoVBMILE(dim=1, prior_cov_shrinkage=1.0)
     with pytest.raises(ValueError, match="prior_cov_shrinkage"):
@@ -458,7 +455,7 @@ def test_prior_cov_shrinkage_rejects_out_of_range():
 
 
 # ---------------------------------------------------------------------------
-# Direction A：专家输出对比正则（Hinge 形式，默认关，逐位 legacy）
+# expert-divergence regulariser (hinge form, off by default = bit-wise legacy)
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""P1 数据管线测试：processed 重建 + 数据集契约（InversionSample 形状/元信息/分块）。"""
+"""Data pipeline: processed rebuild and the dataset contract (shape / meta / batching)."""
 
 from __future__ import annotations
 
@@ -37,14 +37,14 @@ def test_registry_has_both_datasets():
 def test_1d_split_lengths(cfg_1d, split):
     ds = build_dataset(cfg_1d, split)
     expected = {"train": 12, "val": 7, "test": 1360}[split]
-    assert len(ds) == expected, f"{split} 划分长度应为 {expected}"
+    assert len(ds) == expected, f"{split} split should have {expected} entries"
 
 
 @pytest.mark.parametrize("split", ["train", "val", "test"])
 def test_2d_split_lengths(cfg_2d, split):
     ds = build_dataset(cfg_2d, split)
     expected = {"train": 12, "val": 3, "test": 1360}[split]
-    assert len(ds) == expected, f"{split} 划分长度应为 {expected}"
+    assert len(ds) == expected, f"{split} split should have {expected} entries"
 
 
 def test_1d_sample_shapes(cfg_1d):
@@ -53,11 +53,11 @@ def test_1d_sample_shapes(cfg_1d):
     assert s.observation.shape == (6, 1200)
     assert s.target.shape == (3, 1200)
     assert s.meta["target_low"].shape == (3, 1200)
-    assert s.meta["prior"].shape == (3,)          # K 通道先验（深度均值）
+    assert s.meta["prior"].shape == (3,)          # K prior channels (depth mean)
     assert s.meta["mask"].shape == (1, 1200)
-    assert s.sample_id == ds.sample_names[0]          # id = 划分文件中的道名（字符串）
+    assert s.sample_id == ds.sample_names[0]          # id = the trace name from the split file
     assert s.meta["trace"] == int(ds.sample_names[0])
-    # 物理量级抽查：Vp ∈ [900, 5000]，Den ≈ 2.x
+    # physical range spot check: Vp in [900, 5000], density around 2.x
     assert 900.0 < s.target[0].max() < 5000.0
     assert 1.0 < s.target[2].mean() < 3.0
 
@@ -71,11 +71,11 @@ def test_2d_sample_shapes(cfg_2d):
     assert s.meta["target_low"].shape == (3, 1200, w)
     assert s.meta["prior"].shape == (3, 1200, w)
     assert s.meta["mask"].shape == (1, 1200, w)
-    assert s.meta["mask"].sum() == 1200          # 仅中心井位列标记
+    assert s.meta["mask"].sum() == 1200          # only the centre well column is marked
 
 
 def _full_cfg(cfg_2d):
-    """深拷贝一份 data 节并覆盖 window.mode=full（避免污染 session fixture）。"""
+    """Deep-copy the data section and override window.mode=full."""
     cfg = dict(cfg_2d)
     data = cfg_2d["data"]
     cfg["data"] = {**data, "window": {**data["window"], "mode": "full"}}
@@ -83,7 +83,7 @@ def _full_cfg(cfg_2d):
 
 
 def test_2d_full_mode_shapes(cfg_2d):
-    """整剖面模式：len=1，全 (C,H,W) 样本，mask 在划分井位列=1。"""
+    """Whole-section mode: len=1, (C,H,W) sample, mask=1 on the split well columns."""
     ds = build_dataset(_full_cfg(cfg_2d), "train")
     assert len(ds) == 1
     s = ds[0]
@@ -94,24 +94,24 @@ def test_2d_full_mode_shapes(cfg_2d):
     assert s.meta["prior"].shape == (3, 1200, 1360)
     m = s.meta["mask"]
     assert m.shape == (1, 1200, 1360)
-    # train 划分 12 口井 → 12 条井位列全 1，其余 0
+    # the train split has 12 wells: 12 columns are 1, the rest 0
     well_traces = [int(t) for t in ds.sample_names]
     assert s.meta["well_traces"] == well_traces and len(well_traces) == 12
     assert float(m[0, :, well_traces].sum()) == pytest.approx(12 * 1200)
     assert float(m[0, 0, well_traces].min()) == pytest.approx(1.0)
-    # 非井位列全 0
+    # non-well columns are all 0
     non_well = [c for c in range(1360) if c not in well_traces]
     assert float(m[0, :, non_well].sum()) == 0.0
-    # 物理量级抽查（与 slice 样本同源）
+    # physical range spot check (same source as the slice samples)
     assert 900.0 < s.target[0].max() < 5000.0
 
 
 def test_2d_full_mode_matches_slice_center(cfg_2d):
-    """full 模式的井位列 == slice 模式该井窗口中心列（双模式口径一致）。"""
+    """The full-mode well column equals the slice-mode window centre (same convention)."""
     ds_full = build_dataset(_full_cfg(cfg_2d), "train")
     ds = build_dataset(cfg_2d, "train")
     r = ds.radius
-    trace = int(ds.sample_names[0])                 # 第一口井
+    trace = int(ds.sample_names[0])                 # first well
     assert ds_full.sample_names == ds.sample_names
     w_slice = ds._load_item(str(trace))
     assert w_slice.observation.shape == (6, 1200, 2 * r + 1)
@@ -132,7 +132,7 @@ def test_2d_full_mode_invalid_mode_raises(cfg_2d):
 
 
 def test_2d_full_mode_training_batch(cfg_2d):
-    """`_VBMLEBatchDataset` 正常消费 full 样本：一个 batch 含整剖面各字段。"""
+    """`_VBMLEBatchDataset` consumes full samples: one batch holds every section field."""
     from src.trainers.vbmile_trainer import build_vbmile_loader
 
     ds = build_dataset(_full_cfg(cfg_2d), "val")
@@ -155,7 +155,7 @@ def test_collate_1d(cfg_1d):
 
 def test_normalize_roundtrip(cfg_1d):
     ds = build_dataset(cfg_1d, "train")
-    # 物理空间真值一小段（深度轴 4 点）
+    # a short slice of physical-space ground truth (4 depth samples)
     x = np.array([[2863.0, 1500.0, 3900.0, 1100.0],
                   [1350.0, 700.0, 1800.0, 400.0],
                   [2.23, 2.0, 2.5, 1.9]], np.float32)
@@ -163,7 +163,7 @@ def test_normalize_roundtrip(cfg_1d):
     x_back = ds.to_physical(x_norm, which="target")
     np.testing.assert_allclose(x_back, x, rtol=1e-5, atol=1e-3)
     assert x_norm.dtype == np.float32
-    # 2D 形状（C, H, W）广播
+    # 2-D shape (C, H, W) broadcast
     x2 = np.random.RandomState(0).rand(3, 8, 5).astype(np.float32) * 2.0 + 0.5
     assert ds.to_norm(x2, which="target").shape == x2.shape
     np.testing.assert_allclose(
@@ -175,11 +175,11 @@ def test_gmm_prior_loaded(cfg_1d, cfg_2d):
         ds = build_dataset(cfg, "train")
         g = ds.gmm_prior
         assert g["means"].shape == (3, 3)
-        if "covariances" in g:                      # full 协方差格式（新）
+        if "covariances" in g:                      # full covariance layout
             assert g["covariances"].shape == (3, 3, 3)
             for c in g["covariances"]:
                 assert np.linalg.eigvalsh(c).min() > 0
-        else:                                       # legacy 对角格式
+        else:                                       # legacy diagonal layout
             assert g["variances"].shape == (3, 3)
             assert g["variances"].min() > 0
 
@@ -191,7 +191,7 @@ def test_processed_manifest_intact(cfg_1d):
 
 
 def test_stats_file_reference(cfg_1d):
-    """norm_stats.json 与 legacy Evaluation.txt 口径对照（P1 门禁）。"""
+    """norm_stats.json vs the legacy Evaluation.txt convention."""
     from tools.data_check.check_data import REF_TARGET_MEAN_LEGACY, REF_TARGET_STD_LEGACY, TOL_REL
 
     ndiv = cfg_1d["data"]["normalization"]

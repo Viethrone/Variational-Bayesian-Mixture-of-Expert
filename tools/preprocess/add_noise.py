@@ -17,7 +17,7 @@ Conventions:
     model and priors are untouched;
   * white noise in physical space with a single global sigma, seed 0.
 
-用法::
+Usage::
 
     python -m tools.preprocess.add_noise --config configs/data/seismic1d.yaml \\
         --snr 2 5 10 15 [--seed 0] [--overwrite]
@@ -50,7 +50,7 @@ def _resolve_root(root: str) -> Path:
 
 
 def snr_fname(stem: str, snr: float) -> str:
-    """文件主干加信噪比后缀：``seismic6_snr2.npy``。"""
+    """Append an SNR suffix to a file stem: ``seismic6_snr2.npy``."""
     tag = f"snr{snr:g}"
     return f"{stem}_{tag}.npy"
 
@@ -64,22 +64,22 @@ def add_noise(
     fname: str = "seismic6.npy",
     overwrite: bool = False,
 ) -> dict[float, dict[str, float]]:
-    """写加噪版本到 ``out_root``。
+    """Write the noisy variants into ``out_root``.
 
     Args:
-        seismic: 物理空间观测 (C, ...)。
-        snr_dbs: 目标 SNR 列表（**dB** 值，SNR_dB = 10·log10(Ps/Pn)）。
-        seed: 随机种子（numpy default_rng）。
-        out_root: processed 目录（在何处写 *._snr{N}.npy）。
-        fname: 原观测文件名（决定输出主干名）。
-        overwrite: 已存在时覆盖；False 则跳过已存在文件。
+        seismic: physical-space observation (C, ...).
+        snr_dbs: target SNRs in dB (SNR_dB = 10 log10(Ps / Pn)).
+        seed: random seed (numpy default_rng).
+        out_root: processed directory where ``*_snr{N}.npy`` is written.
+        fname: original observation filename (fixes the output stem).
+        overwrite: rewrite existing files; False skips them.
     Returns:
         ``{snr: {"file": str, "measured_snr_db": float, "sigma": float}}``。
     """
     arr = np.asarray(seismic, dtype=np.float32)
     p_signal = float(np.mean(arr.astype(np.float64) ** 2))
     if p_signal <= 0:
-        raise ValueError(f"观测全零/负能量，无法按 SNR 定噪（P_signal={p_signal}）")
+        raise ValueError(f"signal power is zero or negative, cannot set SNR (P_signal={p_signal})")
     rng = np.random.default_rng(seed)
     stem = Path(fname).stem
 
@@ -88,10 +88,10 @@ def add_noise(
     written: dict[float, dict[str, float]] = {}
     for snr in snr_dbs:
         if snr <= 0:
-            raise ValueError(f"SNR 必须为正，收到 {snr}")
+            raise ValueError(f"SNR must be positive, got {snr}")
         fpath = out_root / snr_fname(stem, snr)
         if fpath.exists() and not overwrite:
-            print(f"[skip] {fpath.name} 已存在（--overwrite 可覆盖）")
+            print(f"[skip] {fpath.name} already exists (use --overwrite)")
             written[float(snr)] = {
                 "file": fpath.name,
                 "measured_snr_db": float("nan"),

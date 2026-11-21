@@ -1,7 +1,7 @@
-"""日志工具：控制台 + 文件双通道，按 run 目录隔离。
+"""Logging: console + file channels, isolated per run directory.
 
-约定：`setup_logging` 在每个实验入口调用一次；库代码内部只用 `get_logger(__name__)`，
-不在模块顶层配置 handler，避免污染调用方的日志设置。
+`setup_logging` runs once per experiment entry point; library code only calls
+`get_logger(__name__)` and never configures handlers at import time.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def get_logger(name: str = "inversion") -> logging.Logger:
-    """获取 logger。未显式配置时挂一个控制台 handler，保证直接运行也有输出。"""
+    """Get a logger; without explicit configuration a console handler is attached."""
     logger = logging.getLogger(name)
     if not logger.handlers and not logging.root.handlers:
         handler = logging.StreamHandler(sys.stdout)
@@ -36,13 +36,13 @@ def setup_logging(
     console: bool = True,
     name: Optional[str] = None,
 ) -> logging.Logger:
-    """配置根日志。
+    """Configure the root logger.
 
     Args:
-        level: 日志级别，接受字符串或 logging 常量。
-        log_file: 日志文件路径；提供时自动创建父目录。
-        console: 是否输出到控制台。
-        name: 指定 logger 名；None 表示配置根 logger。
+        level: log level, as a string or a logging constant.
+        log_file: log file path; its parent directory is created.
+        console: also log to the console.
+        name: logger name to configure; None means the root logger.
     """
     logger = logging.getLogger(name) if name else logging.root
     for handler in list(logger.handlers):

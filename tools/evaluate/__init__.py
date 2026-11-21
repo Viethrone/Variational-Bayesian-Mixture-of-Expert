@@ -1,1 +1,1 @@
-"""评估工具：对反演产物计算逐属性指标并与 legacy 口径对照。"""
+"""Evaluation tools: per-property metrics on inversion outputs."""

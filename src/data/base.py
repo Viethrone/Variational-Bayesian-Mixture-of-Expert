@@ -1,11 +1,11 @@
-"""数据层基类与统一样本结构。
+"""Data-layer base classes and the shared sample structure.
 
-`InversionSample` 是数据层与算法层之间的唯一契约：
-    observation  观测数据 y
-    target       真值 x_true（训练/评估用，推理时可为 None）
-    meta         样本级元信息（id、几何参数、传感器索引等）
+`InversionSample` is the only contract between the data layer and the algorithms:
+    observation  observed data y
+    target       ground truth x_true (may be None at inference time)
+    meta         per-sample metadata (id, geometry, indices, ...)
 
-任何具体 Dataset 只需产出该结构，反演求解器与评估脚本就无需感知数据来源。
+Any concrete dataset only produces this structure, so solvers and evaluators stay unaware of the source.
 """
 
 from __future__ import annotations
@@ -26,12 +26,12 @@ DATASETS = Registry("dataset")
 
 @dataclass
 class InversionSample:
-    """单条反演样本。
+    """One inversion sample.
 
     Attributes:
-        observation: 观测数组 y，形状见 configs/data/*.yaml 的 shape.observation。
-        target: 真值数组 x_true；无监督或推理阶段为 None。
-        meta: 附加信息，例如样本 id、观测几何、噪声水平。
+        observation: observed array y, shaped as in configs/data/*.yaml.
+        target: ground-truth array x_true; None for unsupervised or inference passes.
+        meta: extra information such as sample id, geometry or noise level.
     """
 
     observation: np.ndarray
@@ -40,11 +40,11 @@ class InversionSample:
 
     @property
     def sample_id(self) -> str:
-        """样本标识，用于结果文件命名；缺失时按位置回退。"""
+        """Sample identifier used in result filenames; falls back to the index."""
         return str(self.meta.get("id", self.meta.get("index", "sample")))
 
     def to_dict(self) -> Dict[str, Any]:
-        """转为普通 dict，便于序列化与调试。"""
+        """Plain dict view, for serialisation and debugging."""
         return {
             "observation": self.observation,
             "target": self.target,
@@ -53,10 +53,10 @@ class InversionSample:
 
 
 class BaseDataset(ABC):
-    """数据集基类：负责索引管理与样本读取，子类实现 `_load_item`。
+    """Dataset base class: index handling and sample loading; subclasses implement `_load_item`.
 
-    子类通常只需关心「给定样本名 -> 返回 InversionSample」，
-    划分读取、路径解析、缓存等通用逻辑由基类承担。
+    A subclass only maps a sample name to an `InversionSample`;
+    splits, path resolution and caching live here.
     """
 
     def __init__(
@@ -76,15 +76,15 @@ class BaseDataset(ABC):
         )
         if not self.sample_names:
             raise ValueError(
-                f"数据集 [{split}] 为空：未提供 sample_names，或划分文件 {split_file} 无内容。"
+                f"dataset [{split}] is empty: no sample_names given and {split_file} has no entries."
             )
 
-    # ---- 子类实现 ----
+    # ---- implemented by subclasses ----
     @abstractmethod
     def _load_item(self, name: str) -> InversionSample:
-        """按样本名读取一条数据并返回统一结构。"""
+        """Load one sample by name and return the shared structure."""
 
-    # ---- 通用接口 ----
+    # ---- shared interface ----
     def __len__(self) -> int:
         return len(self.sample_names)
 
@@ -100,19 +100,19 @@ class BaseDataset(ABC):
         return sample
 
     def names(self) -> Iterable[str]:
-        """返回全部样本名，便于结果核对与可视化。"""
+        """Iterate over all sample names, for result checking and plots."""
         return iter(self.sample_names)
 
 
 def collate_samples(batch: Sequence[InversionSample]) -> Dict[str, Any]:
-    """把样本列表堆叠为批字典。
+    """Stack a list of samples into a batch dict.
 
     Returns:
         ``{"observation": ndarray, "target": ndarray|None, "meta": list[dict]}``
-        target 中若存在 None，整批 target 返回 None（推理场景）。
+        If any sample has no target, the whole batch target is None (inference).
     """
     if not batch:
-        raise ValueError("collate_samples 收到空批次")
+        raise ValueError("collate_samples got an empty batch")
 
     observations = np.stack([np.asarray(s.observation) for s in batch], axis=0)
     targets: Optional[np.ndarray] = None
@@ -127,12 +127,12 @@ def collate_samples(batch: Sequence[InversionSample]) -> Dict[str, Any]:
 
 
 def load_split(split_file: Optional[str | Path]) -> List[str]:
-    """读取划分文件：每行一个样本名，忽略空行与 `#` 注释。"""
+    """Read a split file: one sample name per line, ignoring blanks and `#` comments."""
     if split_file is None:
         return []
     path = Path(split_file)
     if not path.exists():
-        raise FileNotFoundError(f"划分文件不存在: {path}")
+        raise FileNotFoundError(f"split file not found: {path}")
     names: List[str] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:

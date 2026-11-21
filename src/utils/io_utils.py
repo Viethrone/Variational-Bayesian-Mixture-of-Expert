@@ -1,4 +1,4 @@
-"""文件 IO 工具：目录创建、JSON 读写、原子写入。"""
+"""File IO helpers: directory creation, JSON read/write, atomic writes."""
 
 from __future__ import annotations
 
@@ -14,14 +14,14 @@ PathLike = Union[str, Path]
 
 
 def ensure_dir(path: PathLike) -> Path:
-    """创建目录（含父目录）并返回 Path。"""
+    """Create a directory (with parents) and return its Path."""
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
 def read_json(path: PathLike, *, default: Any = None) -> Any:
-    """读取 JSON；文件不存在时返回 default。"""
+    """Read JSON; return `default` when the file is missing."""
     p = Path(path)
     if not p.exists():
         return default
@@ -30,7 +30,7 @@ def read_json(path: PathLike, *, default: Any = None) -> Any:
 
 
 def write_json(path: PathLike, data: Any, *, indent: int = 2) -> Path:
-    """写入 JSON（先写临时文件再替换，避免中断产生半截文件）。"""
+    """Write JSON through a temporary file so an interrupted write leaves no half file."""
     p = Path(path)
     ensure_dir(p.parent)
     text = json.dumps(data, ensure_ascii=False, indent=indent, default=str)
@@ -39,7 +39,7 @@ def write_json(path: PathLike, data: Any, *, indent: int = 2) -> Path:
 
 
 def atomic_write_text(path: PathLike, text: str, *, encoding: str = "utf-8") -> Path:
-    """原子写文本：同目录临时文件 + os.replace。"""
+    """Atomic text write: temporary file in the same directory + os.replace."""
     p = Path(path)
     ensure_dir(p.parent)
     fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
@@ -55,7 +55,7 @@ def atomic_write_text(path: PathLike, text: str, *, encoding: str = "utf-8") -> 
 
 
 def human_size(num_bytes: float) -> str:
-    """把字节数格式化为易读字符串，用于数据体检报告。"""
+    """Format a byte count for human reading in data audit reports."""
     size = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(size) < 1024.0 or unit == "TB":

@@ -1,10 +1,10 @@
-"""P3 最高风险关：1D 分支 state-dict 与 legacy 权重键集逐字一致。
+"""Highest-risk gate: the 1-D state dict must match the legacy weight keys exactly.
 
-``data/external/weights/vbmile_1d_best.pth`` 是论文主方法 1D 模型的最终权重
-（Geo_VBMILE_1D，base_channels=16、num_experts=3、norm=group）。本次重构的
-1D 分支必须能以 ``strict=True`` 加载它 —— 键集一致 + 张量形状一致，
-这是"移植正确性"最硬的一条证据（若失败需回退为双方协商的可映射格式，
-而非另起炉灶重训练）。
+``data/external/weights/vbmile_1d_best.pth`` holds the released 1-D weights
+(base_channels=16, num_experts=3, norm=group). The 1-D branch must load it with
+``strict=True``: identical key set and shapes. That is the hardest evidence that
+the port is correct; a failure means falling back to a mapped format rather than
+retraining from scratch.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def _vbmile_1d():
 
 
 def test_state_dict_key_set_matches_legacy():
-    """键集一致：既不缺、也不多（含 buffers current_temperature/prior_means/prior_vars）。"""
+    """Same key set, nothing missing or extra (buffers included)."""
     legacy = _legacy_state_dict()
     model = _vbmile_1d()
     model_keys = set(model.state_dict().keys())
@@ -59,21 +59,21 @@ def test_state_dict_key_set_matches_legacy():
 
     missing = legacy_keys - model_keys
     extra = model_keys - legacy_keys
-    assert not missing, f"legacy 中有而模型缺的键: {sorted(missing)}"
-    assert not extra, f"模型中有而 legacy 缺的键: {sorted(extra)}"
+    assert not missing, f"keys present in legacy but missing here: {sorted(missing)}"
+    assert not extra, f"keys here but not in legacy: {sorted(extra)}"
     assert model_keys == legacy_keys
 
 
 def test_strict_load_has_no_missing_or_unexpected():
-    """strict 加载零 missing / 零 unexpected（键集 + 形状完全对齐）。"""
+    """strict load reports zero missing and zero unexpected keys."""
     model = _vbmile_1d()
     missing, unexpected = model.load_state_dict(_legacy_state_dict(), strict=True)
-    assert not missing, f"strict load 缺键: {missing}"
-    assert not unexpected, f"strict load 多余键: {unexpected}"
+    assert not missing, f"strict load missing keys: {missing}"
+    assert not unexpected, f"strict load unexpected keys: {unexpected}"
 
 
 def test_loaded_checkpoint_forward_shapes():
-    """加载 legacy 权重后前向形状符合 (B,6,L) 预测合同。"""
+    """After loading the legacy weights the forward honours the (B,6,L) contract."""
     model = _vbmile_1d()
     model.load_state_dict(_legacy_state_dict(), strict=True)
     model.eval()

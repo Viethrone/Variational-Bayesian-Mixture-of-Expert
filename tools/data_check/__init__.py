@@ -1,1 +1,1 @@
-"""数据核验工具：检查 processed/raw 的形状、统计量与一致性。"""
+"""Data audit tools: shapes, statistics and consistency of processed/raw."""

@@ -1,18 +1,18 @@
-"""Marmousi2 AVA 反演数据集的 1D/2D 实现（主方法 Geo-VB-MILE 使用）。
+"""Marmousi2 AVA inversion datasets (1-D and 2-D) used by Geo-VB-MILE.
 
-数据布局（由 ``tools/preprocess/run_preprocess.py`` 生成，全部为物理空间 float32）：
+Layout (built by ``tools/preprocess/run_preprocess.py``, physical space, float32):
 
-    processed/seismic6.npy           (6, 1200, 1360)  观测角道集（0° 角已去掉）
-    processed/target.npy             (3, 1200, 1360)  弹性参数真值 Vp/Vs/Den
-    processed/target_low_s{30,100}   (3, 1200, 1360)  低频模型（高斯平滑，选 1D/2D 口径）
-    processed/spatial_prior.npy      (K, 1200, 1360)  空间先验概率（通道在前）
-    processed/gmm_prior.npz          (K,3,3)/(K,3)    GMM 参数先验（归一化空间；full 协方差优先）
+    processed/seismic6.npy           (6, 1200, 1360)  observed angle gathers (0 deg dropped)
+    processed/target.npy             (3, 1200, 1360)  ground-truth Vp / Vs / density
+    processed/target_low_s{30,100}   (3, 1200, 1360)  low-frequency model (sigma 30 for 1-D, 100 for 2-D)
+    processed/spatial_prior.npy      (K, 1200, 1360)  spatial prior probability, channel-first
+    processed/gmm_prior.npz          (K,3,3)/(K,3)    GMM parameter prior (normalized; full covariance preferred)
 
-归一化不在 Dataset 内做（Dataset 输出物理空间样本），而是把 norm_stats.json 的统计量挂在
-``dataset.seismic_stats / target_stats`` 上，由训练器/推理管线在需要处 z-score —— 与 legacy
-notebook 的用法一致（theta_norm = (theta-phys − μ)/σ，syn_norm = (syn_phys − μ)/σ）。
-meta 中额外携带：``target_low``（低频模型 trace）、``prior``（该处空间先验）、``mask``（井位掩码）、
-``trace``（道索引号），供模型输入与损失加权使用。
+Normalization is not applied inside the dataset: the statistics from norm_stats.json are
+exposed as ``seismic_stats / target_stats`` and the trainer z-scores where needed, matching
+the legacy notebooks: theta_norm = (theta - mu) / sigma, syn_norm = (syn - mu) / sigma.
+meta also carries ``target_low``, ``prior``, ``mask`` and ``trace`` (the trace index).
+
 """
 
 from __future__ import annotations
@@ -30,10 +30,10 @@ __all__ = ["Seismic1DDataset", "Seismic2DDataset", "load_norm_stats"]
 
 
 def load_norm_stats(stats_file: str | Path, root: Path) -> dict[str, np.ndarray]:
-    """加载 norm_stats.json；按键返回 (channel, 1) 的 numpy 向量。
+    """Load norm_stats.json; return (channel, 1) numpy vectors keyed by statistic.
 
-    stats_file 为配置相对路径（如 data/interim/norm_stats.json），依次尝试：绝对路径 →
-    当前工作目录 → 项目根（root 的上上级目录）。
+    ``stats_file`` may be relative (data/interim/norm_stats.json); it is tried as an
+    absolute path, then relative to the cwd, then relative to the project root.
     """
     p = Path(stats_file)
     if not p.is_absolute() and not p.exists():
@@ -42,7 +42,7 @@ def load_norm_stats(stats_file: str | Path, root: Path) -> dict[str, np.ndarray]
             cand = root.parent.parent / stats_file
         p = cand
     if not p.exists():
-        raise FileNotFoundError(f"找不到归一化统计文件: {stats_file}（请先运行 run_preprocess）")
+        raise FileNotFoundError(f"normalization stats not found: {stats_file} (run run_preprocess first)")
     raw = json.loads(p.read_text(encoding="utf-8"))
     return {
         k: np.asarray(raw[k], dtype=np.float32).reshape(-1, 1)
@@ -51,7 +51,7 @@ def load_norm_stats(stats_file: str | Path, root: Path) -> dict[str, np.ndarray]
 
 
 class _SeismicDatasetBase(BaseDataset):
-    """共享：cube 懒加载 + 统计量解析 + 样本元信息装配。"""
+    """Shared core: lazy cube loading, statistics resolution and sample assembly."""
 
     files: dict[str, str] = {}
     _seismic: np.ndarray | None = None
@@ -78,7 +78,7 @@ class _SeismicDatasetBase(BaseDataset):
         target_columns: Sequence[str] | None = None,
         window: dict[str, Any] | None = None,
         loader: dict[str, Any] | None = None,
-        splits_dir: str | None = None,   # 骨架 configs 遗留键，仅吸收不消费
+        splits_dir: str | None = None,   # accepted for config compatibility, unused
         augment: bool = False,
     ) -> None:
         super().__init__(root, split=split, sample_names=sample_names,
@@ -99,11 +99,11 @@ class _SeismicDatasetBase(BaseDataset):
         self.seismic_mean, self.seismic_std = st["seismic_mean"], st["seismic_std"]
         self.target_mean, self.target_std = st["target_mean"], st["target_std"]
 
-    # ---- 懒加载 ----
+    # ---- lazy loading ----
     def _load_cube(self, key: str) -> np.ndarray:
         attr = f"_{key}"
         if not hasattr(self, attr) or getattr(self, attr) is None:
-            # files 条目为空串/None 时视为未配置（消融 no_spatial_prior 用 null 关掉）
+            # an empty or None entry means unset (the no_spatial_prior ablation passes null)
             full = np.load(self.root / self.files[key]) if self.files.get(key) else None
             setattr(self, attr, full)
         return getattr(self, attr)
@@ -112,21 +112,21 @@ class _SeismicDatasetBase(BaseDataset):
     def seismic(self) -> np.ndarray:
         v = self._load_cube("seismic")
         if v is None:
-            raise FileNotFoundError(f"{self.name}: 配置未给出 seismic 文件名")
+            raise FileNotFoundError(f"{self.name}: config does not name a seismic file")
         return v
 
     @property
     def target(self) -> np.ndarray:
         v = self._load_cube("target")
         if v is None:
-            raise FileNotFoundError(f"{self.name}: 配置未给出 target 文件名")
+            raise FileNotFoundError(f"{self.name}: config does not name a target file")
         return v
 
     @property
     def target_low(self) -> np.ndarray:
         v = self._load_cube("target_low")
         if v is None:
-            raise FileNotFoundError(f"{self.name}: 配置未给出 target_low 文件名")
+            raise FileNotFoundError(f"{self.name}: config does not name a target_low file")
         return v
 
     @property
@@ -135,17 +135,17 @@ class _SeismicDatasetBase(BaseDataset):
 
     @property
     def gmm_prior(self) -> dict[str, np.ndarray]:
-        """归一化空间的 GMM 参数先验。
+        """GMM parameter prior in normalized space.
 
-        full 协方差文件：``{means: (K,3), covariances: (K,3,3), weights: (K,)}``；
-        legacy 对角文件：``{means: (K,3), variances: (K,3)}``。透传
-        ``variances``（= 对角）与 ``covariances``（= full），以及可选的混合权重
-        ``weights``（缺失时下游取均匀权重），供下游按需取用。
+        Full covariance: ``{means: (K,3), covariances: (K,3,3), weights: (K,)}``;
+        legacy diagonal: ``{means: (K,3), variances: (K,3)}``. ``variances``, ``covariances``
+        and the optional mixture ``weights`` are passed through as-is (uniform when absent).
+        
         """
         if self._prior_means is None:
             p = self.root / self.files.get("gmm_prior", "gmm_prior.npz")
             if not p.exists():
-                raise FileNotFoundError(f"缺少 GMM 先验文件: {p}（请先运行 run_preprocess）")
+                raise FileNotFoundError(f"GMM prior file missing: {p} (run run_preprocess first)")
             z = np.load(p)
             self._prior_means = np.asarray(z["means"], dtype=np.float32)
             if "covariances" in z.files:
@@ -171,10 +171,10 @@ class _SeismicDatasetBase(BaseDataset):
             out["weights"] = self._prior_weights
         return out
 
-    # ---- 归一化助手（物理空间 <-> 归一化空间）----
+    # ---- normalization helpers (physical <-> normalized) ----
     @staticmethod
     def _broadcast(stats: np.ndarray, ndim: int) -> np.ndarray:
-        """把 (C,1) 统计量 reshape 成可对 (C, ...) 张量广播的 (C,1,1,...)。"""
+        """Reshape a (C,1) statistic to (C,1,1,...) so it broadcasts over (C, ...) tensors."""
         return stats.reshape(-1, *([1] * (ndim - 1)))
 
     def to_norm(self, x: np.ndarray, *, which: str) -> np.ndarray:
@@ -201,11 +201,11 @@ class _SeismicDatasetBase(BaseDataset):
 
 @DATASETS.register("seismic_1d")
 class Seismic1DDataset(_SeismicDatasetBase):
-    """逐道（trace-level）数据集：每样本 = 单道 6 角观测 + 3 参数剖面。
+    """Per-trace dataset: one sample is a single trace of 6 angles plus the 3-parameter profile.
 
-    长度 = splits/*.txt 中的道索引数。``_load_item`` 返回物理空间的
-    observation (6, 1200) / target (3, 1200)，meta 携带归一化低频模型、
-    空间先验（深度均值）与井位掩码。
+    Length = number of trace indices in splits/*.txt. ``_load_item`` returns physical-space
+    observation (6, 1200) / target (3, 1200); meta carries the normalized low-frequency model,
+    the spatial prior (depth mean) and the well mask.
     """
 
     def _load_item(self, name: str) -> InversionSample:
@@ -220,15 +220,15 @@ class Seismic1DDataset(_SeismicDatasetBase):
 
         meta = self._base_meta(
             name,
-            target_low=low_norm,        # (3, 1200) 低频模型（target 空间归一化）
-            prior=prior,                # (K,) 或 None
+            target_low=low_norm,        # (3, 1200) low-frequency model in target space
+            prior=prior,                # (K,) or None
             mask=np.ones((1, obs_phys.shape[-1]), dtype=np.float32),
         )
         sample = InversionSample(observation=obs_phys, target=tgt_phys, meta=meta)
         return self._augment_if(sample)
 
     def _augment_if(self, sample: InversionSample) -> InversionSample:
-        # legacy 用 1.0±0.05 的 gain 乘整道；默认关闭（deterministic 复现优先）
+        # the legacy code applied a 1.0 +- 0.05 gain per trace; off by default for determinism
         if self.augment:
             g = float(np.random.uniform(0.95, 1.05))
             sample.observation = (sample.observation * g).astype(np.float32)
@@ -238,17 +238,18 @@ class Seismic1DDataset(_SeismicDatasetBase):
 
 @DATASETS.register("seismic_2d")
 class Seismic2DDataset(_SeismicDatasetBase):
-    """二维数据集，支持两种输出模式（对齐 legacy ``SeismicDataset.mode``）：
+    """2-D dataset with two output modes (matching the legacy ``SeismicDataset.mode``):
 
-    ``mode="slice"``（默认）以每口井（划分文件内 trace）为中心取定宽窗口 (2·radius+1)；
-    ``mode="full"`` 把**整个剖面**作为单条样本（``__len__ == 1``）——推理/评测时对全剖面
-    一次前向（legacy ``AVA2d_inverse_phase`` 的 test2D 路径，``well_indices=None`` 即全一 mask）。
+    ``mode="slice"`` (default) takes a fixed-width window (2*radius+1) around each well trace;
+    ``mode="full"`` treats the whole section as one sample (``__len__ == 1``), used for a single
+    whole-section forward pass (the legacy test2D path with an all-ones mask).
 
-    slice：observation (6, H, 2r+1) / target (3, H, 2r+1)，边界 reflect 填充，
-    meta.mask (1, H, 2r+1) 标记中心井位列。
-    full ：observation (6, H, W) / target (3, H, W)，meta.mask (1, H, W) 在划分文件
-    各井位列 = 1、其余 0（test 划分含全部道 → 实际为全一，与 legacy 一致）；
-    meta 另带 ``well_traces`` 井位清单、``mode="full"``。空间先验与低频模型取整剖面。
+    slice: observation (6, H, 2r+1) / target (3, H, 2r+1), reflect-padded at the borders,
+        with meta.mask (1, H, 2r+1) marking the centre well column.
+    full:  observation (6, H, W) / target (3, H, W); meta.mask (1, H, W) is 1 on the
+        split's well columns and 0 elsewhere (the test split covers all traces, so it is
+        all ones); meta also carries ``well_traces`` and ``mode``. The prior and the
+        low-frequency model cover the full section.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -261,7 +262,7 @@ class Seismic2DDataset(_SeismicDatasetBase):
             self.radius = None
             self.pad_mode = None
         else:
-            raise ValueError(f"window.mode 必须是 'slice' 或 'full'，实际为 {self.mode!r}")
+            raise ValueError(f"window.mode must be 'slice' or 'full', got {self.mode!r}")
 
     def __len__(self) -> int:
         return 1 if self.mode == "full" else len(self.sample_names)
@@ -289,7 +290,7 @@ class Seismic2DDataset(_SeismicDatasetBase):
         mask = np.zeros((1, H, W), dtype=np.float32)
         well_traces = [int(t) for t in self.sample_names]
         for t in well_traces:
-            mask[..., t] = 1.0                              # 井位列整列标记
+            mask[..., t] = 1.0                              # mark the whole well column
 
         meta: dict[str, Any] = {
             "trace": -1,
@@ -318,7 +319,7 @@ class Seismic2DDataset(_SeismicDatasetBase):
 
         w = obs_phys.shape[-1]
         mask = np.zeros((1, obs_phys.shape[-2], w), dtype=np.float32)
-        mask[:, :, w // 2] = 1.0       # 中心井位列
+        mask[:, :, w // 2] = 1.0       # centre well column
 
         meta = self._base_meta(
             name,

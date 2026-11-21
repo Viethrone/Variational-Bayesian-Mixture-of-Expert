@@ -1,1 +1,1 @@
-"""主实验入口。"""
+"""Main experiment entry point."""

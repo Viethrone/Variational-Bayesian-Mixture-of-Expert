@@ -1,9 +1,9 @@
-"""地震 AVA 反演专用指标：R² 与皮尔逊相关系数（逐属性）。
+"""Seismic AVA inversion metrics: R^2 and Pearson correlation, per property.
 
-与 legacy ``old/AVA/plot/Evaluation.txt`` 的口径一致：对每个弹性属性
-（Vp/Vs/Den）分别计算 R² / PCC / RMSE / MAE / SSIM。RMSE/MAE/SSIM 已在
-``src.metrics.base`` 提供（全局标量）；这里补充「逐通道」计算族，并把 R²/PCC
-按通道各自分子分母独立聚合（等价于 flatten 每个通道后计算），返回形状 (C,)。
+The convention matches the legacy ``Evaluation.txt``: for every elastic property
+(Vp/Vs/Den) compute R^2 / PCC / RMSE / MAE / SSIM. RMSE/MAE/SSIM are global and come
+from ``src.metrics.base``; this module adds the per-channel family, evaluating R^2/PCC
+per channel (equivalent to flattening each channel), returning shape (C,).
 """
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ __all__ = ["METRICS", "R2Score", "PearsonCorrelation", "compute_metrics_per_chan
 @METRICS.register("r2")
 @METRICS.register("r2_score")
 class R2Score(Metric):
-    """确定系数 R² = 1 - SS_res/SS_tot，越高越好。
+    """Coefficient of determination R^2 = 1 - SS_res/SS_tot (higher is better).
 
-    全局模式（单标量）：对全部元素计算；通道模式（``per_channel=True`` 或
-    ``channel_axis``）时返回 (C,) 数组（0 维为张量标量）。
+    Global mode returns one scalar over all elements; channel mode (``per_channel=True``
+    or a given ``channel_axis``) returns a (C,) array.
     """
 
     name = "r2"
@@ -31,9 +31,9 @@ class R2Score(Metric):
 
     def __init__(self, channel_axis: Optional[int] = 0, per_channel: bool = True) -> None:
         """Args:
-            channel_axis: 通道轴；None 表示没有通道轴。
-            per_channel: True 返回逐通道数组（供 Evaluation.txt 对照），
-                False 返回全体标量。
+            channel_axis: channel axis; None means there is none.
+            per_channel: True returns the per-channel array (matching Evaluation.txt),
+                False returns a single scalar.
         """
         self.channel_axis = channel_axis
         self.per_channel = bool(per_channel)
@@ -60,9 +60,9 @@ class R2Score(Metric):
 @METRICS.register("pearson")
 @METRICS.register("pcc")
 class PearsonCorrelation(Metric):
-    """皮尔逊相关系数（逐通道或全体）。
+    """Pearson correlation coefficient (per channel or global).
 
-    PCC = cov(p,t) / (σ_p σ_t)。空间结构相关性度量 —— Evaluation.txt 的 corr 列。
+    PCC = cov(p,t) / (sigma_p sigma_t), the ``corr`` column of Evaluation.txt.
     """
 
     name = "pearson"
@@ -100,10 +100,10 @@ def _pearson(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def compute_metrics_per_channel(pred: Any, target: Any) -> dict:
-    """对标 legacy Evaluation.txt：每个属性的 r2 / pearson / rmse / mae / ssim。
+    """Match the legacy Evaluation.txt: r2 / pearson / rmse / mae / ssim per property.
 
-    返回 ``{"r2": (C,), "pearson": (C,), "rmse": (C,), "mae": (C,)}``；
-    ssim 需要二维窗口（逐通道取 2D 切片），此处省略，由 tools/evaluate 单独处理。
+    Returns ``{"r2": (C,), "pearson": (C,), "rmse": (C,), "mae": (C,)}``;
+    SSIM needs a 2-D window (a slice per channel) and is handled by tools/evaluate.
     """
     from src.metrics.base import RMSE, MAE
 

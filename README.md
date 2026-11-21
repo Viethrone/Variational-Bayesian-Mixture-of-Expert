@@ -132,19 +132,6 @@ the released training geometry, so any `--radius >= 6` works with the released c
 With the anisotropic encoder (`encoder_downsample: aniso`, already used by the 2-D recipe)
 the trace axis stays above `model.min_down_size` and widths 3 / 5 / 15 also run.
 
-## Reference values
-
-Single-seed, delivery recipes, sliding-window protocol (2-D) / direct traces (1-D):
-
-| | Vp | Vs | Den |
-|---|---|---|---|
-| 1-D (full + closed-form well NLL + c = 0.01) | 0.977 | 0.976 | 0.951 |
-| 2-D (full on top of the B3 recipe) | 0.966 | 0.966 | 0.940 |
-
-The run-to-run noise floor is Vp ±0.0034 / Vs ±0.0024 / Den ±0.0044 (1-D) and
-Vp ±0.0027 / Vs ±0.0031 / Den ±0.0090 (2-D): differences below those are not resolvable.
-The 2-D recipe also uses the deterministic protocol, the deviatoric seismic likelihood at weight 0.03 and per-expert dilations `[7, 15, 7]`.
-
 ## GMM prior
 
 The released default is **K = 3**. The fitting is `GMMPriorFitter` (sklearn full-covariance

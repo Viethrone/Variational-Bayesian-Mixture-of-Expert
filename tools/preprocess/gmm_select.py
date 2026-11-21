@@ -68,14 +68,14 @@ def load_train_pixels(
     target_phys: np.ndarray, train_path: str | Path | None,
     norm_stats: dict[str, Any],
 ) -> np.ndarray:
-    """train 井像素 -> 归一化矩阵 (N, 3)。
+    """Train-well pixels -> normalized matrix (N, 3).
 
     Args:
-        target_phys: (C, T, X) 物理弹性参数场。
-        train_path: train 井索引文件（每行一道索引）；None 时退化为全剖面中线。
-        norm_stats: 含 ``target_mean/target_std`` (3,1) 的统计字典。
+        target_phys: (C, T, X) physical elastic-parameter volume.
+        train_path: file of train trace indices (one per line); None falls back to the midline.
+        norm_stats: statistics dict holding ``target_mean`` / ``target_std`` of shape (3, 1).
     Returns:
-        归一化空间 (N, 3)（物理场 z-score，沿用 train 统计口径）。
+        Normalized (N, 3) pixels (z-score with the train statistics).
     """
     target = np.asarray(target_phys, dtype=np.float32)
     if target.ndim == 2:
@@ -98,10 +98,10 @@ def bhattacharyya_distance(
     mean_a: np.ndarray, var_a: np.ndarray,
     mean_b: np.ndarray, var_b: np.ndarray,
 ) -> float:
-    """两个高斯间的 Bhattacharyya 距离（文档 M9 公式）。
+    """Bhattacharyya distance between two Gaussians (the M9 formula).
 
-    ``var_a/var_b`` 可为对角方差向量 (D,)（自动 ``np.diag``）或全协方差矩阵
-    (D, D)（GMMPriorFitter full 口径，直接使用）。
+    ``var_a`` / ``var_b`` may be diagonal variance vectors (D,) (turned into a matrix) or
+    full covariance matrices (D, D), used as is.
     """
     mu_a = np.asarray(mean_a, dtype=np.float64).ravel()
     mu_b = np.asarray(mean_b, dtype=np.float64).ravel()
@@ -110,8 +110,8 @@ def bhattacharyya_distance(
     sa = np.diag(va.ravel()) if va.ndim <= 1 else va
     sb = np.diag(vb.ravel()) if vb.ndim <= 1 else vb
     if sa.shape != (mu_a.size, mu_a.size) or sb.shape != sa.shape:
-        raise ValueError(f"方差输入形状不支持：var_a {va.shape} / var_b {vb.shape}，"
-                         f"均值维 D={mu_a.size}")
+        raise ValueError(f"unsupported variance shape: var_a {va.shape} / var_b {vb.shape}, "
+                         f"mean dimension D={mu_a.size}")
     sm = 0.5 * (sa + sb)
     dm = mu_a - mu_b
     h1 = 0.125 * float(dm @ np.linalg.solve(sm, dm))
@@ -135,11 +135,11 @@ def _component_overlaps(means: np.ndarray, variances: np.ndarray) -> list[float]
 def fit_gmm_metrics(
     X_norm: np.ndarray, K: int, seed: int = DEFAULT_SEED,
 ) -> dict[str, Any]:
-    """diag-GMM（sklearn，MLE 口径）的 BIC/AIC/轮廓/Bhattacharyya。
+    """BIC / AIC / silhouette / Bhattacharyya for a diag-GMM fitted by MLE.
 
     Returns:
         ``{"k", "bic", "aic", "silhouette", "max_bhattacharyya",
-        "mean_bhattacharyya", "n_samples"}``。
+        "mean_bhattacharyya", "n_samples"}``.
     """
     from sklearn.mixture import GaussianMixture
 
@@ -171,11 +171,11 @@ def fit_gmm_metrics(
 def fit_shrinkage_bic(
     X_norm: np.ndarray, K: int, seed: int = DEFAULT_SEED,
 ) -> dict[str, Any]:
-    """主方法先验口径（``GMMPriorFitter`` shrinkage 正则协方差）的 BIC 对照。
+    """BIC reference for the shrinkage-regularised ``GMMPriorFitter`` covariance.
 
-    协方差被平滑（0.9·分量 + 0.1·全局 + eps*eye，full 口径不裁剪），不再是 MLE 解，
-    BIC 直接用 shrink 化分布的对数似然仍可对比（统一 K 下的模型证据排序，文档 M5
-    注明口径）。full 方差参数数 = D(D+1)/2 每分量。
+    The covariance is smoothed (0.9 component + 0.1 global + eps*eye, no clipping), so it is
+    no longer an MLE; the log-likelihood of the shrunk density still ranks models at fixed K
+    (see M5). A full covariance costs D(D+1)/2 parameters per component.
     """
     fitter = GMMPriorFitter(K=K, seed=seed)
     prior = fitter.fit(X_norm)
@@ -188,13 +188,13 @@ def fit_shrinkage_bic(
         diff = X_norm[:, None, :] - means[None]                         # (N,K,D)
         qf = np.einsum("nki,kij,nkj->nk", diff, prec, diff)
         log_norm = -0.5 * (qf + logdet[None] + D * np.log(2 * np.pi))
-        n_params = K * (D + D * (D + 1) // 2) + (K - 1)                 # 均值+协方差+权重
+        n_params = K * (D + D * (D + 1) // 2) + (K - 1)                 # means + covariance + weights
     else:
         variances = prior["variances"]
         diff2 = ((X_norm[:, None, :] - means[None]) ** 2) / variances[None]
         log_norm = -0.5 * (diff2.sum(axis=2) + np.log(variances).sum(axis=1)
                            + D * np.log(2 * np.pi))
-        n_params = K * (2 * D) + (K - 1)                                # 均值+方差+权重
+        n_params = K * (2 * D) + (K - 1)                                # means + variances + weights
     lnL = float((np.logaddexp.reduce(log_norm, axis=1) - np.log(K)).sum())
     return {"k": int(K), "bic_shrink": float(-2 * lnL + n_params * np.log(n)),
             "lnL_shrink": lnL}
@@ -204,23 +204,23 @@ def cv_heldout_loglik(
     X_norm: np.ndarray, K: int, n_folds: int = 5, seed: int = DEFAULT_SEED,
     block_rows: int | None = None, covariance_type: str = "diag",
 ) -> dict[str, Any]:
-    """留出交叉验证的逐样本对数似然（sklearn GMM，MLE 口径）。
+    """Held-out cross-validated per-sample log-likelihood (sklearn GMM, MLE).
 
     Args:
-        X_norm: (N, D) 归一化测井像素。
-        K: 分量数。
-        n_folds: 折数。
-        seed: 折切分随机种（GMM 拟合沿用同一随机种）。
-        block_rows: 若给出，把连续 ``block_rows`` 行划为一个不可再分块、按块折行
-            （同井相邻深度无论 train/val 都在同一块内）。测井像素按
-            ``load_train_pixels`` 为时间主序：``block_rows = n_wells * (T // n_folds)``
-            即把每道井的深度轴均分 ``n_folds`` 段。None 则随机 KFold。
-        covariance_type: "diag"（与 BIC/AIC 行同族）或 "full"（与主方法先验同族，
-            但 full 在 14400 样本重尾云上有过拟合风险，官方折 std 大，仅作对照）。
+        X_norm: (N, D) normalized well pixels.
+        K: number of components.
+        n_folds: number of folds.
+        seed: seed for the fold split (also used for the GMM fit).
+        block_rows: group consecutive rows into atomic blocks before splitting, so neighbouring
+            depths of one well never straddle train/val. Pixels from ``load_train_pixels`` are
+            time-major, so ``block_rows = n_wells * (T // n_folds)`` splits each well depth axis
+            into ``n_folds`` segments. None means a random KFold.
+        covariance_type: "diag" (same family as the BIC/AIC rows) or "full" (same family as the
+            method prior; on 14400 heavy-tailed samples it can overfit, so it is a reference only).
     Returns:
         ``{"cv_ll_mean", "cv_ll_std", "cv_ll_folds", "cv_n_folds",
-        "cv_block_rows", "cv_covariance_type"}``。均值=各折留出子集上逐样本
-        对数似然的平均（``sklearn.GaussianMixture.score``，天然对数）。
+        "cv_block_rows", "cv_covariance_type"}``. Reported values are the mean per-sample
+        log-likelihood over the held-out folds (``GaussianMixture.score``).
     """
     from sklearn.mixture import GaussianMixture
     from sklearn.model_selection import KFold
@@ -230,7 +230,7 @@ def cv_heldout_loglik(
     splits = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
     if block_rows:
         if block_rows < 1:
-            raise ValueError(f"block_rows 必须 ≥1，收到 {block_rows}")
+            raise ValueError(f"block_rows must be >= 1, got {block_rows}")
         block_idx = np.minimum(np.arange(n) // block_rows, n // block_rows)
         n_blocks = int(block_idx.max()) + 1
         orig = [(tr, va) for tr, va in splits.split(np.arange(n_blocks))]
@@ -256,7 +256,7 @@ def select_k(
     cv_n_folds: int = 5, cv_block_rows: int | None = None,
     cv_covariance_type: str = "diag",
 ) -> list[dict[str, Any]]:
-    """K=1..k_max 全表（MLE + shrinkage 对照 + 留出交叉验证对数似然）。"""
+    """Full table for K=1..k_max (MLE + shrinkage reference + held-out log-likelihood)."""
     rows: list[dict[str, Any]] = []
     for K in range(1, k_max + 1):
         row = fit_gmm_metrics(X_norm, K, seed=seed)
@@ -270,7 +270,7 @@ def select_k(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="专家数 K 选择：GMM BIC/AIC/轮廓/重叠度（返修实验 M5，N6）",
+        description="Choose K: GMM BIC/AIC/silhouette/overlap (revision experiments M5, N6)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--config", "-c", default="configs/data/seismic1d.yaml",
@@ -303,21 +303,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     stats_f = _resolve(str((data_cfg.get("normalization") or {}).get(
         "stats_file", "data/interim/norm_stats.json")))
     if not stats_f.exists():
-        print(f"[error] 归一化统计不存在: {stats_f}", file=sys.stderr)
+        print(f"[error] normalization stats missing: {stats_f}", file=sys.stderr)
         return 2
     norm_stats = json.loads(stats_f.read_text(encoding="utf-8"))
 
     X = load_train_pixels(target, train_path, norm_stats)
-    print(f"[i] train 井像素 (N,3) = {X.shape}  归一化口径 norm_stats.json")
+    print(f"[i] train well pixels (N,3) = {X.shape}  normalized with norm_stats.json")
     n_wells = None
     if train_path is not None and train_path.exists():
         n_wells = len(sorted(int(x) for x in train_path.read_text().split()))
     block_rows = None
     if n_wells:
         block_rows = n_wells * (target.shape[1] // args.cv_folds)
-    print(f"[i] CV: {args.cv_folds} 折，时间块折行 block_rows={block_rows}"
-          f"（{n_wells} 道 × T/{args.cv_folds}）" if block_rows else
-          f"[i] CV: {args.cv_folds} 折，随机 KFold（未取到 train 道数）")
+    print(f"[i] CV: {args.cv_folds} folds, time-block rows block_rows={block_rows}"
+          f"({n_wells} traces x T/{args.cv_folds})" if block_rows else
+          f"[i] CV: {args.cv_folds} folds, random KFold (train traces unknown)")
     rows = select_k(X, k_max=args.k_max, seed=args.seed,
                     cv_n_folds=args.cv_folds, cv_block_rows=block_rows,
                     cv_covariance_type=args.cv_cov)
@@ -335,7 +335,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     (outdir / "gmm_k_selection.json").write_text(
         json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    print(f"[ok] outputs/summary/gmm_k_selection.csv —— K=1..{args.k_max}, CV {args.cv_folds} 折")
+    print(f"[ok] outputs/summary/gmm_k_selection.csv - K=1..{args.k_max}, CV {args.cv_folds} folds")
     print(f"{'K':>2} {'BIC':>11} {'silhouette':>10} {'cv_ll':>9} {'cv_std':>7}"
           f" {'maxBha':>8} {'meanBha':>8} {'minW':>6}")
     for r in rows:
@@ -344,15 +344,15 @@ def main(argv: Sequence[str] | None = None) -> int:
               f" {r['max_bhattacharyya']:>8.4g} {r['mean_bhattacharyya']:>8.4g}"
               f" {r['min_weight']:>6.3g}")
     best = max(rows, key=lambda r: r["cv_ll_mean"])
-    # one-standard-error 规则：取在其最佳值的 1 个标准差内、K 最小者
+    # one-standard-error rule: smallest K within one standard deviation of the best
     thresh = best["cv_ll_mean"] - best["cv_ll_std"]
     cands = [r for r in rows if r["cv_ll_mean"] >= thresh]
     k_selected = min(cands, key=lambda r: r["k"])["k"]
     best_s = min(rows, key=lambda r: r["bic_shrink"])
-    print(f"[i] CV 对数似然峰值 K={best['k']}（{best['cv_ll_mean']:.3f}±{best['cv_ll_std']:.3f}）；"
-          f"1SE 规则选定 K={k_selected}")
-    print(f"[i] 注：BIC 谷值 K={min(rows, key=lambda r: r['bic'])['k']}（单调下降，"
-          f"14000+ 样本量级无判别力，不作为选择依据）；shrinkage-BIC 谷值 K={best_s['k']}")
+    print(f"[i] CV log-likelihood peaks at K={best['k']} ({best['cv_ll_mean']:.3f}+-{best['cv_ll_std']:.3f}); "
+          f"1SE rule selects K={k_selected}")
+    print(f"[i] note: BIC minimum at K={min(rows, key=lambda r: r['bic'])['k']} (monotone,"
+          f"uninformative at 14000+ samples, not used to select); shrinkage-BIC minimum K={best_s['k']}")
     return 0
 
 

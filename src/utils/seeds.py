@@ -1,7 +1,7 @@
-"""随机种子统一入口。
+"""Single entry point for seeding.
 
-所有实验在开始前调用一次 `seed_everything(cfg["seed"])`，
-保证 numpy / random / torch（若安装）行为一致，并在 run 元信息中留痕。
+Every experiment calls `seed_everything(cfg["seed"])` once before it starts,
+so numpy / random / torch behave consistently and the seed is recorded in run metadata.
 """
 
 from __future__ import annotations
@@ -17,18 +17,18 @@ __all__ = ["seed_everything", "get_random_state"]
 
 def seed_everything(seed: int, *, deterministic: bool = False,
                     deterministic_algorithms: bool | str = False) -> int:
-    """设置各随机源的种子。
+    """Seed every random source.
 
     Args:
-        seed: 随机种子。
-        deterministic: 为 True 时额外开启 cudnn 确定性模式（可能降低速度）。
-        deterministic_algorithms: ``torch.use_deterministic_algorithms`` 开关。
-            ``True`` = 严格模式（遇到没有确定性实现的算子直接报错）；
-            ``"warn"`` = 只告警（``warn_only=True``，用于部分算子只有原子实现的情形）；
-            ``False``（默认）= 不动，保持旧行为。
+        seed: the random seed.
+        deterministic: also enable cudnn deterministic mode (may be slower).
+        deterministic_algorithms: switch for ``torch.use_deterministic_algorithms``.
+            ``True`` = strict (an operator without a deterministic implementation raises);
+            ``"warn"`` = warn only (for operators that only have atomic implementations);
+            ``False`` (default) = leave the setting alone.
 
     Returns:
-        实际使用的种子。
+        The seed that was applied.
     """
     seed = int(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -57,7 +57,7 @@ def seed_everything(seed: int, *, deterministic: bool = False,
 
 
 def get_random_state() -> dict:
-    """返回当前随机状态快照，便于调试不可复现问题。"""
+    """Return a snapshot of the RNG state, for debugging irreproducibility."""
     state = {
         "python": random.getstate(),
         "numpy": np.random.get_state(),
@@ -69,7 +69,7 @@ def get_random_state() -> dict:
 
 
 def _try_import_torch() -> Optional[object]:
-    """按需导入 torch，未安装时返回 None，避免硬依赖。"""
+    """Import torch lazily; return None when it is absent, so torch stays optional."""
     try:
         import torch  # noqa: PLC0415
     except ImportError:

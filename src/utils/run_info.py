@@ -1,7 +1,7 @@
-"""run 元信息：创建带时间戳的 run 目录，并落盘配置副本、命令、commit、环境、指标。
+"""Run metadata: create a timestamped run directory and persist the config copy, the
 
-这是可复现性的核心：任何实验入口都应通过 `RunInfo.create(...)` 起步，
-之后所有产出（权重、预测、重建场、日志、临时图）都写在 run 目录内。
+command, commit, environment and metrics. This is the backbone of reproducibility: every
+entry point starts from `RunInfo.create(...)` and writes everything inside the run directory.
 """
 
 from __future__ import annotations
@@ -35,14 +35,14 @@ RUN_SUBDIRS = (
 
 
 def make_run_name(exp_name: str, seed: Any = 0, *, timestamp: Optional[datetime] = None) -> str:
-    """生成 run 名称：`YYYY-MM-DD_HHMMSS_<实验名>_seed<种子>`。"""
+    """Build a run name: `YYYY-MM-DD_HHMMSS_<exp>_seed<seed>`."""
     ts = timestamp or datetime.now()
     safe_name = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in str(exp_name))
     return f"{ts.strftime('%Y-%m-%d_%H%M%S')}_{safe_name}_seed{seed}"
 
 
 def git_commit(repo_root: PathLike = ".") -> str:
-    """返回当前 HEAD 的短 commit；非 git 仓库或无 git 时返回 "unknown"。"""
+    """Short HEAD commit, or "unknown" outside a git repository."""
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -59,7 +59,7 @@ def git_commit(repo_root: PathLike = ".") -> str:
 
 
 def collect_env_info() -> Dict[str, Any]:
-    """收集环境信息：Python、平台、关键依赖版本、设备可见性。"""
+    """Collect environment info: Python, platform, key dependency versions, device visibility."""
     info: Dict[str, Any] = {
         "python": sys.version.replace("\n", " "),
         "executable": sys.executable,
@@ -82,7 +82,7 @@ def collect_env_info() -> Dict[str, Any]:
         info["torch_cuda_available"] = bool(torch.cuda.is_available())
         if torch.cuda.is_available():
             info["torch_cuda_device_count"] = torch.cuda.device_count()
-            if torch.cuda.device_count() > 0:   # CUDA_VISIBLE_DEVICES="" 时 device(0) 非法
+            if torch.cuda.device_count() > 0:   # device(0) is invalid when CUDA_VISIBLE_DEVICES is empty
                 info["torch_cuda_device_name"] = torch.cuda.get_device_name(0)
     except ImportError:
         info["torch_cuda_available"] = False
@@ -91,12 +91,12 @@ def collect_env_info() -> Dict[str, Any]:
 
 @dataclass
 class RunInfo:
-    """一次实验 run 的目录与元信息句柄。
+    """Directory and metadata handle for one run.
 
     Attributes:
-        run_dir: run 根目录，所有产出的写入位置。
-        run_name: run 目录名。
-        config: 合并后的最终配置。
+        run_dir: run root, where every artefact is written.
+        run_name: name of the run directory.
+        config: the resolved config.
     """
 
     run_dir: Path
@@ -104,7 +104,7 @@ class RunInfo:
     config: Dict[str, Any]
     extra: Dict[str, Any] = field(default_factory=dict)
 
-    # ---- 创建 ----
+    # ---- creation ----
     @classmethod
     def create(
         cls,
@@ -117,10 +117,10 @@ class RunInfo:
         command: Optional[str] = None,
         subdirs: tuple = RUN_SUBDIRS,
     ) -> "RunInfo":
-        """创建 run 目录并写入元信息文件。
+        """Create the run directory and write its metadata files.
 
-        写入内容：
-            config.yaml / cmd.txt / git_commit.txt / env.txt / 以及各产出子目录。
+        Written:
+            config.yaml / cmd.txt / git_commit.txt / env.txt and the artefact subdirectories.
         """
         cfg = dict(config)
         name = run_name or make_run_name(
@@ -161,17 +161,17 @@ class RunInfo:
 
         info = cls(run_dir=run_dir, run_name=name, config=cfg)
         info.setup_logging(cfg)
-        logger.info("run 目录: %s", info.run_dir.resolve())
+        logger.info("run directory: %s", info.run_dir.resolve())
         logger.info("git commit: %s", commit)
         return info
 
-    # ---- 路径助手 ----
+    # ---- path helpers ----
     def path(self, *parts: str) -> Path:
-        """拼接 run 目录下的子路径。"""
+        """Join a sub-path inside the run directory."""
         return self.run_dir.joinpath(*parts)
 
     def subdir(self, name: str) -> Path:
-        """获取（并按需创建）run 目录下的子目录。"""
+        """Get (creating if needed) a sub-directory of the run directory."""
         return ensure_dir(self.run_dir / name)
 
     @property
@@ -194,9 +194,9 @@ class RunInfo:
     def logs_dir(self) -> Path:
         return self.subdir("logs")
 
-    # ---- 日志 ----
+    # ---- logging ----
     def setup_logging(self, cfg: Optional[Mapping[str, Any]] = None) -> None:
-        """按配置初始化文件+控制台日志，日志写入 run 目录内。"""
+        """Initialise console + file logging with the file inside the run directory."""
         cfg = cfg if cfg is not None else self.config
         log_cfg = dict(cfg.get("logging") or {})
         rel = log_cfg.get("log_file", "logs/run.log")
@@ -204,9 +204,9 @@ class RunInfo:
         console = bool(log_cfg.get("console", True))
         setup_logging(level, log_file=self.run_dir / rel, console=console)
 
-    # ---- 指标 ----
+    # ---- metrics ----
     def write_metrics(self, metrics: Mapping[str, Any], *, name: str = "metrics.json") -> Path:
-        """写入指标，并附带 run 元信息，便于后续汇总。"""
+        """Write metrics together with the run metadata for later aggregation."""
         payload: Dict[str, Any] = {
             "run_name": self.run_name,
             "exp_name": self.config.get("exp_name"),
@@ -220,12 +220,12 @@ class RunInfo:
         return write_json(self.run_dir / name, payload)
 
     def read_metrics(self, *, name: str = "metrics.json") -> Any:
-        """读取已写入的指标文件；不存在时返回 None。"""
+        """Read the metrics file; return None when it does not exist."""
         return read_json(self.run_dir / name, default=None)
 
     def write_text(self, filename: str, text: str) -> Path:
-        """在 run 目录下写文本文件。"""
+        """Write a text file inside the run directory."""
         return atomic_write_text(self.run_dir / filename, text)
 
-    def __str__(self) -> str:  # pragma: no cover - 调试辅助
+    def __str__(self) -> str:  # pragma: no cover - debugging aid
         return f"RunInfo({self.run_name})"

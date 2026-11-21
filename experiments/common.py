@@ -1,7 +1,7 @@
-"""实验公共助手：命令行解析、配置解析、run 创建、数据集组装。
+"""Shared experiment helpers: CLI parsing, config resolution, run creation, dataset build.
 
-所有实验入口都从这里起步，
-保证 run 目录结构、元信息落盘与随机种子处理完全一致。
+Every entry point starts here, so the run directory layout, metadata
+and seeding behave identically across experiments.
 """
 
 from __future__ import annotations
@@ -31,21 +31,21 @@ logger = get_logger(__name__)
 
 
 def project_root() -> Path:
-    """返回项目根目录（本文件的上级目录）。"""
+    """Project root (the parent directory of this file)."""
     return Path(__file__).resolve().parent.parent
 
 
 def set_default(parser: argparse.ArgumentParser, dest: str, value: Any) -> None:
-    """调整已定义参数的默认值。
+    """Change the default of an already declared argument.
 
-    `make_parser` 已统一声明 --outputs-root 等公共选项，子命令若需要不同默认值，
-    用本函数修改而不是重复 add_argument（重复添加会触发 argparse 冲突错误）。
+    `make_parser` declares the shared options; use this instead of adding the argument again
+    (a duplicate would make argparse raise).
     """
     for action in parser._actions:
         if action.dest == dest:
             action.default = value
             return
-    raise ValueError(f"解析器中不存在参数 dest={dest!r}，无法设置默认值")
+    raise ValueError(f"the parser has no argument dest={dest!r}")
 
 
 def make_parser(
@@ -54,26 +54,26 @@ def make_parser(
     default_config: str = "configs/inversion/default.yaml",
     extra_args: Optional[Sequence[tuple]] = None,
 ) -> argparse.ArgumentParser:
-    """构造统一的命令行解析器。
+    """Build the shared command-line parser.
 
     Args:
-        description: 子命令说明。
-        default_config: `--config` 的默认值。
-        extra_args: 追加参数，形如 ``[("--split", {"default": "test"})]``。
+        description: what the command does.
+        default_config: default for `--config`.
+        extra_args: additional arguments, e.g. ``[("--split", {"default": "test"})]``.
     """
     parser = argparse.ArgumentParser(description=description, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--config", "-c", type=str, default=default_config, help="配置文件路径（支持 _base_ 继承）")
-    parser.add_argument("--name", type=str, default=None, help="实验名，用于 run 目录命名")
-    parser.add_argument("--seed", type=int, default=None, help="随机种子，覆盖配置中的 seed")
-    parser.add_argument("--device", type=str, default=None, help="计算设备，覆盖配置中的 device")
-    parser.add_argument("--outputs-root", type=str, default=None, help="run 目录根，默认 outputs/runs")
+    parser.add_argument("--config", "-c", type=str, default=default_config, help="config file path (supports _base_ inheritance)")
+    parser.add_argument("--name", type=str, default=None, help="experiment name, used for the run directory")
+    parser.add_argument("--seed", type=int, default=None, help="random seed, overrides the configured one")
+    parser.add_argument("--device", type=str, default=None, help="device, overrides the configured one")
+    parser.add_argument("--outputs-root", type=str, default=None, help="run directory root (default outputs/runs)")
     parser.add_argument(
         "--set",
         dest="overrides",
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="点分路径覆盖配置，可多次使用，例如 --set inversion.solver.lr=0.01",
+        help="dot-path config override, e.g. --set trainer.max_epochs=2",
     )
     for flag, kwargs in extra_args or ():
         parser.add_argument(flag, **kwargs)
@@ -81,7 +81,7 @@ def make_parser(
 
 
 def resolve_config(args: argparse.Namespace, extra_overrides: Optional[List[str]] = None) -> Dict[str, Any]:
-    """加载配置并应用命令行与额外覆盖项。"""
+    """Load the config and apply the command-line and extra overrides."""
     overrides = list(getattr(args, "overrides", []) or []) + list(extra_overrides or [])
     if getattr(args, "seed", None) is not None:
         overrides.append(f"seed={args.seed}")
@@ -105,7 +105,7 @@ def prepare_run(
     outputs_root: Optional[str] = None,
     subdirs: Optional[Sequence[str]] = None,
 ) -> RunInfo:
-    """设置随机种子并创建 run 目录，写入全部元信息。"""
+    """Seed everything, create the run directory and write its metadata."""
     seed = int(cfg.get("seed", 0))
     seed_everything(
         seed,
@@ -137,11 +137,11 @@ def prepare_run(
 
 
 def build_dataset(cfg: Dict[str, Any], split: str = "test") -> Any:
-    """按配置组装数据集实例。
+    """Build the dataset instance described by the config.
 
-    读取 `cfg["data"]`，从 DATASETS 注册表实例化对应实现。
+    Reads `cfg["data"]` and instantiates it from the DATASETS registry.
 
-    TODO: 具体数据集实现完成后，这里无需修改（由 `_target_` 驱动）。
+    Nothing here needs to change when a new dataset is added: `_target_` drives it.
     """
     from src.data.base import DATASETS
     from src.utils.registry import build_from_config
@@ -150,14 +150,14 @@ def build_dataset(cfg: Dict[str, Any], split: str = "test") -> Any:
     target = data_cfg.pop("_target_", None)
     if target is None:
         raise ValueError(
-            "配置缺少 data._target_，无法确定数据集实现。"
-            "请在 configs/data/*.yaml 中填写，例如 _target_: inversion_dataset"
+            "the config has no data._target_, so the dataset cannot be resolved."
+            "set it in configs/data/*.yaml, e.g. _target_: seismic_2d"
         )
 
     splits = dict(data_cfg.get("splits") or {})
     split_file = splits.get(split)
     if split_file is None:
-        raise ValueError(f"data.splits 中未配置 {split!r} 划分文件；已有键: {sorted(splits)}")
+        raise ValueError(f"data.splits has no {split!r} entry; present keys: {sorted(splits)}")
 
     root = data_cfg.get("root") or (cfg.get("paths") or {}).get("data_processed") or "data/processed"
     root_path = Path(root)
@@ -177,7 +177,7 @@ def build_dataset(cfg: Dict[str, Any], split: str = "test") -> Any:
 
 
 def save_cmd(run_info: RunInfo, argv: Optional[Sequence[str]] = None) -> Path:
-    """把当前命令行写入 run 目录（RunInfo.create 已写过一次，这里用于补充规范化信息）。"""
+    """Write the command line into the run directory (RunInfo.create already writes cmd.txt)."""
     argv = list(argv if argv is not None else sys.argv)
     text = "\n".join(
         [

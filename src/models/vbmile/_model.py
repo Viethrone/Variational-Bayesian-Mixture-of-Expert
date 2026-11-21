@@ -111,8 +111,35 @@ class GeoVBMILE(nn.Module):
                  decoder_share: str = "shared",
                  prior_cov_shrinkage: float = 0.0,
                  expert_dilations: Optional[List[int]] = None,
-                 variational_covariance: str = "diag"):
+                 variational_covariance: str = "diag",
+                 out_head_share: str = "merged",
+                 skip2_conv_before_upsample: bool = True,
+                 tail_same_size: bool = True,
+                 pad_mode: str = "manual_reflect"):
         super().__init__()
+        # These four keywords were structural switches in the research tree. The release
+        # ships a single implementation, so they are accepted only at their fixed values:
+        # a research run directory can then be replayed here unchanged, while a config
+        # asking for a different structure fails loudly instead of silently training the
+        # released form. Each entry is (keyword, given value, the only supported value).
+        structural_switches = (
+            ("out_head_share", out_head_share, "merged"),
+            ("pad_mode", pad_mode, "manual_reflect"),
+            ("skip2_conv_before_upsample", skip2_conv_before_upsample, True),
+            ("tail_same_size", tail_same_size, True),
+        )
+        for key, given, supported in structural_switches:
+            # YAML yields real booleans for true/false; the string spelling is accepted too
+            # so that a quoted value does not turn into a confusing failure.
+            given_text = str(given).strip().lower()
+            matches = (given is supported if isinstance(given, bool)
+                       else given_text == str(supported).lower())
+            if not matches:
+                raise ValueError(
+                    f"{key}={given!r} is not supported: this release keeps a single "
+                    f"structural form, so the only accepted value is {supported!r}. "
+                    "Retrain with that form, or change src/models/vbmile/ directly.")
+
         if dim not in (1, 2):
             raise ValueError(f"dim must be 1 or 2, got {dim!r}")
         if variational_covariance not in ("diag", "full"):

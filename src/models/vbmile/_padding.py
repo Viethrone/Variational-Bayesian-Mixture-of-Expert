@@ -91,16 +91,19 @@ def _install_manual_reflect(module: nn.Module) -> int:
     for ``narrow`` / ``flip`` / ``cat`` keeps reflect semantics bit-for-bit while making
     the backward pass deterministic on CUDA.
 
+    A convolution that carries a ``manual_reflect`` attribute (``_AdaptiveConv2d``) is
+    switched by setting that flag, which keeps its faster fused path; every other
+    ``nn.Conv2d`` gets the kernels installed as its ``forward``. The check is attribute
+    based on purpose: importing ``_AdaptiveConv2d`` here would make this module and
+    ``_encoder2d`` depend on each other.
+
     Returns:
         The number of conv layers that were switched.
     """
-    # local import: _encoder2d imports these kernels, so a module-level import would cycle
-    from src.models.vbmile._encoder2d import _AdaptiveConv2d
-
     n = 0
     for m in module.modules():
         if isinstance(m, nn.Conv2d) and m.padding_mode == "reflect":
-            if isinstance(m, _AdaptiveConv2d):
+            if hasattr(m, "manual_reflect"):
                 m.manual_reflect = True
             else:
                 m.forward = types.MethodType(_manual_reflect_forward, m)

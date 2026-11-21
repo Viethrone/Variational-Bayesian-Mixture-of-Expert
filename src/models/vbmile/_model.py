@@ -18,7 +18,7 @@ from src.models.base import MODELS
 from src.models.vbmile._blocks1d import UNetEncoder1D
 from src.models.vbmile._decoder1d import SharedExpertDecoder1D
 from src.models.vbmile._encoder2d import UNetEncoder2D
-from src.models.vbmile._film_decoder2d import ExpertDecoder2D, SpatialFiLMGenerator
+from src.models.vbmile._film_decoder2d import ExpertDecoder2D
 from src.models.vbmile._padding import _install_manual_reflect
 from src.models.vbmile._partition1d import VariationalPartitionLayer1D
 from src.models.vbmile._partition2d import VariationalPartitionLayer2D

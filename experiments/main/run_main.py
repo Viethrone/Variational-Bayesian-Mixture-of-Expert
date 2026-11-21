@@ -87,8 +87,12 @@ def _assemble_vbmile_trainer(trainer: Any, cfg: Dict[str, Any], run_info: Any) -
     train_dataset = build_dataset(cfg, split="train")
     val_dataset = build_dataset(cfg, split="val")
 
-    # ---- model: GMM parameter prior (normalized space (K,3)) ----
-    # ``prior._target_: none`` disables the prior (unit-prior ablation)
+    # ---- model: parameter prior in normalized space (K, 3) ----
+    # ``prior._target_`` is a *source selector*, not a registry lookup: the three choices
+    # read different inputs (unit / training-target statistics / the processed GMM file),
+    # and all of them end up in the model's ``prior_means`` / ``prior_vars`` buffers. See
+    # ``src/priors/__init__.py`` for the full convention; ``PRIORS`` exists for callable
+    # prior objects, which the training loop does not need.
     mcfg = dict(cfg.get("model") or {})
     m_target = mcfg.pop("_target_", None) or "vbmile_1d"
     mcfg.pop("prior_means", None)
@@ -97,9 +101,9 @@ def _assemble_vbmile_trainer(trainer: Any, cfg: Dict[str, Any], run_info: Any) -
     prior_kwargs: Dict[str, Any] = {}
     if prior_target not in ("", "none"):
         if prior_target == "gaussian":
-            # single Gaussian prior shared by all experts = global z-score statistics
-            # of the training targets (the targets are already z-scored, so this is
-            # close to N(0, I) — qualitatively different from the 3-modal GMM)
+            # one Gaussian shared by all experts, built from the training-target z-score
+            # statistics (the targets are already z-scored, so this is near N(0, I) and
+            # qualitatively different from the 3-modal GMM)
             tmean = np.asarray(train_dataset.target_mean, np.float32).reshape(1, -1)
             tstd = np.asarray(train_dataset.target_std, np.float32).reshape(1, -1)
             K = int(mcfg.get("num_experts", 3))

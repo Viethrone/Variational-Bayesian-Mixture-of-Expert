@@ -1,7 +1,7 @@
-# 公共默认配置：所有具体配置都会继承本文件。
-# 约定：路径一律相对于项目根目录；实验相关的可变参数不写在这里。
+# Shared defaults inherited by every concrete config.
+# Paths are relative to the project root; per-experiment values do not belong here.
 
-exp_name: default          # 会被命令行 --name 覆盖
+exp_name: default          # overridden by --name
 seed: 0
 device: auto               # auto | cpu | cuda | mps
 num_workers: 4
@@ -20,21 +20,21 @@ paths:
 
 logging:
   level: INFO              # DEBUG | INFO | WARNING | ERROR
-  log_file: logs/run.log   # 相对 run 目录
+  log_file: logs/run.log   # relative to the run directory
   console: true
-  # tensorboard / wandb 按需开启
+  # tensorboard / wandb can be enabled when needed
   tensorboard: false
   wandb: false
   wandb_project: null
 
 checkpoint:
-  save_dir: checkpoints    # 相对 run 目录
+  save_dir: checkpoints    # relative to the run directory
   save_last: true
   save_best: true
-  metric_for_best: null    # 例如 rmse / r2
+  metric_for_best: null    # e.g. rmse / r2
   mode: min                # min | max
 
-# 以下区块由具体配置（configs/data、configs/model、configs/inversion 等）覆盖或补全
+# The sections below are filled in by configs/data, configs/model, configs/inversion
 data: {}
 model: {}
 forward: {}
@@ -42,25 +42,28 @@ inversion: {}
 prior: {}
 regularizer: {}
 loss: {}
-# 地震似然的 per-angle 可靠性遮蔽（opt-in，默认**关闭**；实现见 src/forward/reliability.py）。
-# 不写下面这些键 = mode: none ⇒ 数值路径与 legacy 逐位一致（连 loss_dict 键集都不变）。
-# 用法（写进具体臂的 loss 段，或用命令行覆盖 loss.xxx）：
+# Per-angle reliability masking of the seismic likelihood (opt-in, off by default; see
+# src/forward/reliability.py). Omitting these keys means mode: none, which keeps the
+# numerics and the loss_dict key set identical to the released path. Enable it per arm:
 #   seismic_mask_mode: critical_angle    # none | critical_angle
-#   seismic_mask_layer_sigma: 0.0        # θc 的深度平滑尺度（单位=样点）；0=相邻样点口径
-#   seismic_mask_taper_deg: 5.0          # 过临界前的余弦过渡带（度）
-#   seismic_mask_floor: 0.0              # 过临界区保留的最小权重
-# 提醒（2026-10-22 临界角普查，Marmousi2）：最临界界面 θc=32.8°，θc≤30° 的界面占比 0.00%
-# ⇒ 在 5–30° 数据上"θ≥θc 硬遮蔽"是空操作；只有 taper 带边缘会压到 ≤0.04% 的像素。
-# 开启后 loss_dict 多出 seismic_mask_occupancy（=1−mean(w)，分母=全部 (B,A,样点) 权重
-# 元素）与 seismic_mask_occupancy_energy（被压到 0 的权重覆盖的残差能量占比）。
+#   seismic_mask_layer_sigma: 0.0        # depth smoothing of Vp, in samples; 0 = adjacent
+#   seismic_mask_taper_deg: 5.0          # cosine taper width below theta_c, degrees
+#   seismic_mask_floor: 0.0              # weight kept beyond theta_c
+# On the 5-30 deg Marmousi2 data this is a no-op: every interface has theta_c >= 32.8 deg,
+# so a hard mask removes nothing and only the taper edge touches <= 0.04% of the pixels.
+# When enabled, loss_dict also reports seismic_mask_occupancy (= 1 - mean(w)) and
+# seismic_mask_occupancy_energy (residual energy covered by zero weights).
 metrics: {}
 trainer: {}
 
-# 理论口径契约（每次 run 落盘 <run>/theory_contract.json）。
-#   * require_full: true  ⇒ "变分族必须是全协方差"成为**强制**检查（主方法配置打开）；
-#     纯对角的复现/消融保持 false，否则会被整体判成事故。
-#   * strict: true        ⇒ 任一**强制**检查不过即硬失败；默认只告警 + 记录。
-# 加权 KL、learned 噪声、非严格 ELBO 都属**允许口径**，只记录不阻断。
+# Theory contract (written to <run>/theory_contract.json on every run).
+#   * require_full: true  - "the variational family must be full covariance" becomes a
+#     mandatory check (the delivery recipes set it); diagonal-only reproductions and
+#     ablations keep it false so they are not reported as failures.
+#   * strict: true        - fail hard when a mandatory check does not pass; the default
+#     only warns and records.
+# Weighted KL, learned noise and a non-strict ELBO are allowed conventions: recorded, not
+# enforced.
 theory_contract:
   strict: false
   require_full: false

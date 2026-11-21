@@ -5,16 +5,16 @@ exp_name: seismic_1d_marmousi2
 data:
   _target_: seismic_1d                        # src/data/seismic_dataset.py::Seismic1DDataset
   name: marmousi2_1d
-  root: data/processed/marmousi2_1d           # 每个数据集独立 processed 命名空间（MANIFEST 不互相覆盖）
+  root: data/processed/marmousi2_1d           # one processed namespace per dataset (own MANIFEST)
   splits_dir: data/splits
 
-  # data/processed 下重建产物（物理空间数组；dataset 加载时按 norm_stats.json 标准化）
+  # Rebuilt artefacts under data/processed (physical space; z-scored at load time)
   files:
-    seismic: seismic6.npy            # (6, 1200, 1360) 观测角道集（0 幅角去掉，余 6 角）
-    target: target.npy               # (3, 1200, 1360) 弹性参数真值 Vp/Vs/Den
-    target_low: target_low_s30.npy   # (3, 1200, 1360) 低频模型（sigma=30 高斯平滑）
-    spatial_prior: spatial_prior.npy # (K, 1200, 1360) 空间先验概率（通道在前）
-    gmm_prior: gmm_prior.npz         # 归一化空间 (K, 3) 专家先验（means/variance）
+    seismic: seismic6.npy            # (6, 1200, 1360) observed gathers, 0 deg dropped
+    target: target.npy               # (3, 1200, 1360) ground-truth Vp / Vs / density
+    target_low: target_low_s30.npy   # (3, 1200, 1360) low-frequency model, sigma=30
+    spatial_prior: spatial_prior.npy # (K, 1200, 1360) spatial prior, channel-first
+    gmm_prior: gmm_prior.npz         # (K,3) parameter prior in normalized space
 
   target_columns: [Vp, Vs, Den]
 
@@ -28,17 +28,22 @@ data:
     target: [3, 1200]
 
   normalization:
-    method: standard                 # dataset 内对物理空间做 z-score，统计量来自 stats_file
+    method: standard                 # z-score in the dataset, statistics from stats_file
     stats_file: data/interim/norm_stats.json
 
   loader:
     batch_size: 20
     shuffle_train: true
     drop_last: false
-    num_workers: 2
+    # Deterministic protocol, as in the 2-D config: workers off, and the shuffle order
+    # plus the worker seeds taken from an explicit generator, so scheduling cannot move
+    # the run. Pair with the top-level `deterministic` / `deterministic_algorithms` keys
+    # in the recipe config for a bit-wise reproducible rerun.
+    num_workers: 0
+    explicit_generator: true
     pin_memory: false
 
-# ---- run_preprocess 专用区块（build_dataset 不消费）----
+# ---- used by run_preprocess only (build_dataset ignores it) ----
 preprocess:
   root: data/processed/marmousi2_1d
   interim_dir: data/interim
@@ -46,7 +51,7 @@ preprocess:
   raw:
     observations: data/raw/observations
     priors: data/raw/priors
-  low_sigma: 30                      # 1D 口径 gaussian_filter(target, sigma=30, axes=(1,2))
+  low_sigma: 30                      # gaussian_filter(target, sigma=30, axes=(1, 2))
   num_train: 12
   num_val: 7
   train_start: 20

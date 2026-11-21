@@ -14,9 +14,7 @@ import torch.nn.functional as F
 
 from src.models.vbmile._norm import NormFactory2D
 from src.models.vbmile._padding import (
-    _install_manual_reflect,
     _manual_reflect_forward,
-    _manual_reflect_pad_axis,
     _pad_axes,
 )
 

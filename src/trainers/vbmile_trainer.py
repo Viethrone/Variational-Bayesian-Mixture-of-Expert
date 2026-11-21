@@ -253,6 +253,10 @@ class VBEMLETrainer(BaseTrainer):
         best_epoch = 0
         final_metrics: Dict[str, Any] = {}
 
+        # optional per-epoch components (masking occupancy, noise variances), kept so the
+        # final metrics can report them; empty when no optional switch is on
+        live_extras: Dict[int, Dict[str, float]] = {}
+
         for epoch in range(1, self.max_epochs + 1):
             phase_idx = self._phase_index(epoch)
             if phase_idx is not None and self._phase_boundary(epoch):
@@ -279,6 +283,13 @@ class VBEMLETrainer(BaseTrainer):
             train_loss, comps = self._train_one_epoch(model, criterion, optimizer, epoch, stats)
             val_mse = self._validate(model, device)
             scheduler.step()
+
+            # optional per-component terms that only exist when the corresponding switch is
+            # on (noise model, reliability masking); kept out of the default log line so the
+            # released output is unchanged, but reported when present
+            extras = {k: v for k, v in comps.items()
+                      if k.startswith(("seismic_mask_", "seismic_coh_var", "seismic_white_var"))}
+            live_extras[epoch] = extras
 
             # when the loss carries an explicit seismic noise model, also print its
             # variances (default iid keeps the plain released log line)
@@ -336,6 +347,11 @@ class VBEMLETrainer(BaseTrainer):
             "lr_final": float(scheduler.get_last_lr()[0]),
             "dim": int(self.dim),
         }
+        # optional components (masking occupancy, noise variances) for the last epoch, so a
+        # run that used them stays auditable after the fact; absent otherwise, which keeps
+        # the released metrics key set unchanged
+        for k, v in live_extras.get(self.max_epochs, {}).items():
+            final_metrics[k] = float(v)
         # theory-contract summary (injected by the entry point); absent by default so the
         # released metrics key set is unchanged
         tc = self.cfg.extra.get("theory_contract")
@@ -556,6 +572,14 @@ class VBEMLETrainer(BaseTrainer):
         (overburden), ``vp2 = vp[..., 1:]`` (underburden) and ``theta_c = arcsin(vp1/vp2)``
         (``90 deg`` when ``vp2 <= vp1``).
 
+        The weight is evaluated on the **low-frequency model**, not on the current prediction.
+        ``theta_c`` is a property of the geology (the velocity contrast across each
+        interface), so it must not depend on how far the network has trained: a partially
+        trained Vp is spatially incoherent, every adjacent contrast looks random, ``theta_c``
+        collapses and the mask would switch the seismic term off for a reason unrelated to the
+        critical angle. Measured on the 1-D delivery data, the low-frequency model gives an
+        occupancy of 0.000000 while a random physical-range profile gives 0.058.
+
         Args:
             theta_norm: ``(N, 3, ...)`` normalized theta; ``N`` may be the batch size.
             stats: normalization statistics (the same dict as ``_syn_norm``).
@@ -637,7 +661,11 @@ class VBEMLETrainer(BaseTrainer):
             if self.forward is not None and stats_ready:
                 theta_norm = model_output["theta_sample"]
                 syn_norm = self._syn_norm(theta_norm, stats)
-                mask_weight = self._seismic_mask_weight(theta_norm, stats, criterion)
+                # the mask refers to the *interface physics*, so it is evaluated on the
+                # low-frequency model: a spatially incoherent Vp (any partially trained
+                # prediction) makes every adjacent contrast random and would mask the gather
+                # for a reason that has nothing to do with the critical angle.
+                mask_weight = self._seismic_mask_weight(target_low, stats, criterion)
 
             crit_kwargs = dict(
                 model_output=model_output,

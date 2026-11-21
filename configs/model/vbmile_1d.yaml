@@ -1,5 +1,5 @@
-# 1D 主方法模型：GeoVBMILE(dim=1)（对齐 legacy vbmile_1d_best.pth state-dict）。
-# base_channels=16、num_experts=3、norm=group 与 checkpoint 训练口径一致。
+# 1-D model: GeoVBMILE(dim=1), state-dict compatible with the released
+# vbmile_1d_best.pth (base_channels=16, num_experts=3, group norm).
 _base_:
   - ../base.yaml
   - base_vbmile.yaml
@@ -9,5 +9,5 @@ exp_name: vbmile_1d_model
 model:
   _target_: vbmile_1d
   dim: 1
-  prior_means: null   # 推理/从头训练置空；复现 legacy 时由脚本从 gmm_prior.npz 注入
+  prior_means: null   # null for inference / from-scratch; injected from gmm_prior.npz
   prior_vars: null

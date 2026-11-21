@@ -397,14 +397,32 @@ def test_smoke_one_batch_with_forced_nonzero_occupancy():
 
 
 def test_trainer_mask_weight_shape_1d_and_2d():
-    """The trainer computes weights from physical theta: 1-D (N,A,L) / 2-D (N,A,H,W)."""
+    """The trainer computes weights from a physical Vp: 1-D (N,A,L) / 2-D (N,A,H,W)."""
     tr = _build_smoke({"seismic_mask_mode": "critical_angle"})
     torch.manual_seed(0)
-    w1 = tr._seismic_mask_weight(torch.randn(4, 3, L), tr.stats, tr.criterion)
+    # a smooth, physical low-frequency model, i.e. what the trainer feeds in
+    low1 = torch.linspace(-1.0, 1.0, L).reshape(1, 1, L).expand(4, 3, L)
+    low2 = torch.linspace(-1.0, 1.0, H).reshape(1, 1, H, 1).expand(4, 3, H, W)
+    w1 = tr._seismic_mask_weight(low1, tr.stats, tr.criterion)
     assert tuple(w1.shape) == (4, NA, L)
-    w2 = tr._seismic_mask_weight(torch.randn(4, 3, H, W), tr.stats, tr.criterion)
+    w2 = tr._seismic_mask_weight(low2, tr.stats, tr.criterion)
     assert tuple(w2.shape) == (4, NA, H, W)
     assert torch.isfinite(w1).all() and torch.isfinite(w2).all()
     # switch off => None (nothing extra is computed)
     tr2 = _build_smoke()
-    assert tr2._seismic_mask_weight(torch.randn(4, 3, L), tr2.stats, tr2.criterion) is None
+    assert tr2._seismic_mask_weight(low1, tr2.stats, tr2.criterion) is None
+
+
+def test_mask_is_a_noop_for_a_smooth_physical_profile():
+    """A slowly varying Vp has no post-critical interface, so nothing is masked.
+
+    This is the property the README relies on, and it is the reason the trainer evaluates
+    the weight on the low-frequency model: an incoherent profile would mask the gather for
+    a reason unrelated to the critical angle.
+    """
+    tr = _build_smoke({"seismic_mask_mode": "critical_angle"})
+    # Vp rising monotonically from 2.5 to 4.5 km/s: every interface has vp2 > vp1, so
+    # theta_c = arcsin(vp1/vp2) is large but never inside the 5-30 deg band
+    rising = torch.linspace(2.5, 4.5, L).reshape(1, 1, L).expand(2, 3, L)
+    w = tr._seismic_mask_weight(rising, tr.stats, tr.criterion)
+    assert float(1.0 - w.mean()) == pytest.approx(0.0, abs=1e-9), float(1.0 - w.mean())

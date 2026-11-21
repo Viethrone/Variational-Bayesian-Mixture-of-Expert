@@ -8,10 +8,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.models.vbmile._blocks1d import BasicBlock1D
 from src.models.vbmile._encoder2d import _AdaptiveConv2d
 from src.models.vbmile._norm import NormFactory2D
-from src.models.vbmile._padding import _pad_axes
 
 
 class SpatialFiLMGenerator(nn.Module):

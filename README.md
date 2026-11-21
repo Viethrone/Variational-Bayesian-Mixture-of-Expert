@@ -38,15 +38,12 @@ unexpected keys).
 
 ### Full-covariance posterior
 
-Every expert carries `q(theta | z=k) = N(mu_k, Sigma_k)` with `Sigma_k = L_k L_k^T`:
-
-* the decoder keeps its 6-channel head and adds three off-diagonal channels
-  (`L[1,0]`, `L[2,0]`, `L[2,1]`, row-major); the head is zero-initialised, so a fresh
-  full-covariance model is bit-wise identical to the diagonal one at step 0;
-* `KL(q || p)` is closed form, `½[tr(Sigma_p⁻¹ Sigma_q) + deltaᵀ Sigma_p⁻¹ delta − D +
-  ln|Sigma_p| − ln|Sigma_q|]`, and works against diagonal or full priors;
-* the marginal output uses `diag(Sigma_k)` from the law of total covariance, so the
-  off-diagonals also reach `final_pred`; Monte-Carlo sampling uses `theta = mu + L eps`.
+Every expert carries `q(theta | z=k) = N(mu_k, Sigma_k)` with `Sigma_k = L_k L_k^T`: the
+decoder keeps its 6-channel head and adds three zero-initialised off-diagonal channels
+(`L[1,0]`, `L[2,0]`, `L[2,1]`, row-major), so a fresh model is bit-wise identical to the
+diagonal one at step 0; `KL(q || p)` is closed form and works against diagonal or full
+priors; the marginal output takes `diag(Sigma_k)` from the law of total covariance, so the
+off-diagonals also reach `final_pred`; sampling uses `theta = mu + L eps`.
 
 Two well-likelihood modes pair with it: `"expert"` (analytic `E_q[-log p(y|theta)]`, needs
 `tr(Sigma_k)`; used in 1-D) and `"mixture_predictive"` (the only mode in which the
@@ -71,10 +68,12 @@ loss:
 ```
 
 On the 5–30° Marmousi2 data it is a strict no-op (every interface has `theta_c >= 32.8°`,
-median 88.5°), so hard masking removes 0.0000% of the seismic gradient energy; the switch
-targets wider-angle data, where Aki–Richards really degrades. With the mode on, the
-trainer must supply the weight (a silent fallback raises), and `loss_dict` reports
-`seismic_mask_occupancy(_energy)`.
+median 88.5°), so hard masking removes 0.0000% of the seismic gradient energy. The weight is
+evaluated on the **low-frequency model**, not on the current prediction: `theta_c` is a
+property of the interface, so an incoherent early-training Vp would make the occupancy
+measure model error rather than geology (5.8% for a random physical-range profile, 0.000000
+for the low-frequency model). The occupancy is reported in `loss_dict` and persisted into
+`metrics.json`.
 
 ## Install
 
@@ -123,14 +122,12 @@ geometry. `--radius` is the window half-width; `--snr-tag` labels a metrics row 
 The tool rebuilds the window exactly as the dataset does, keeps only the centre column,
 reuses the training assembly (model, GMM prior, normalization) and runs an alignment
 self-check (denormalized centre column vs `target.npy[:, :, trace]`, relative error
-< 1e-5). It writes per-property R² / Pearson / NRMSE over all pixels plus profile SSIM on
-[0,1]-normalized sections to `outputs/summary/<name>.json`.
+< 1e-5). It writes per-property R² / Pearson / NRMSE plus profile SSIM on [0,1]-normalized
+sections to `outputs/summary/<name>.json`.
 
-Measured on the released architecture with `encoder_downsample: iso`, the smallest workable
-trace width is **13** (the trace axis collapses before a `3x3` conv below that); width 15 is
-the released training geometry, so any `--radius >= 6` works with the released checkpoint.
-With the anisotropic encoder (`encoder_downsample: aniso`, already used by the 2-D recipe)
-the trace axis stays above `model.min_down_size` and widths 3 / 5 / 15 also run.
+Measured with `encoder_downsample: iso`, the smallest workable trace width is **13** (the
+trace axis collapses before a `3x3` conv below that); with `aniso` (the 2-D recipe) widths
+3 / 5 / 15 also run. Width 15 is the released geometry, so any `--radius >= 6` works.
 
 ## GMM prior
 
@@ -147,11 +144,27 @@ prior:
 ```
 
 The 2-D recipe sets it together with `model.prior_cov_shrinkage: 0.1`; the 1-D delivery
-deliberately uses the **unit prior** (`prior: {}`), because the single-temperature
-objective `c·KL(q || N(0, I))` states that target. Use `prior._target_: none` for the
-unit-prior ablation, or `configs/ablations/gaussian_prior.yaml` for a single Gaussian.
-Shrinkage is a paired switch: with a diagonal or unit prior it is ignored and the contract
-flags the combination as inert.
+deliberately uses the **unit prior** (`prior: {}`), because the single-temperature objective
+`c·KL(q || N(0, I))` states that target. Use `prior._target_: none` for the unit-prior
+ablation, or `configs/ablations/gaussian_prior.yaml` for a single Gaussian. Shrinkage is a
+paired switch: with a diagonal or unit prior it is ignored and the contract flags it as inert.
+
+## Reproducibility
+
+`prior._target_` is a *source selector*, not a registry lookup: `none` / `gaussian` / `gmm`
+read different inputs (unit prior / training-target statistics / the processed GMM file) and
+all end up in the model's `prior_means` / `prior_vars` buffers, so the choice never changes
+the code path inside the model.
+
+The loader is deterministic in both recipes (`num_workers: 0` + `explicit_generator: true`),
+so same-seed reruns reproduce the trajectory. The *strict* protocol
+(`deterministic_algorithms: true`) is enabled for the 2-D recipe only, where a same-seed
+rerun is bit-wise identical (verified: equal metrics, byte-identical checkpoints). It is
+**not** available for 1-D: the decoder downsamples the gate weights with
+`F.interpolate(mode="linear")`, whose CUDA backward has no deterministic kernel, so strict
+mode raises at the first backward pass (`area` is also non-deterministic, and `nearest`
+would change the numbers). `deterministic_algorithms: warn` gives the check without the
+hard failure.
 
 ## Repository layout
 

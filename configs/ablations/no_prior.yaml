@@ -1,6 +1,6 @@
-# 消融：no_prior —— 不给模型注入 GMM 参数先验。
-# 入口见 experiments/main/run_main.py：``prior._target_: none`` 时模型退回单位先验
-# （无 GMM 偏置初始化、KL(θ) 对单位先验计算）。对应 legacy 的 "无先验" 变体。
+# Ablation: no_prior - do not inject a GMM parameter prior.
+# With ``prior._target_: none`` the model falls back to the unit prior (no GMM bias
+# initialisation, KL(theta) evaluated against N(0, I)).
 _base_: ../inversion/vbmile_1d.yaml
 
 exp_name: ablation_no_prior
